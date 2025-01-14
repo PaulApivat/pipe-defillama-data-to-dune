@@ -6,6 +6,11 @@ import os
 from dotenv import load_dotenv
 from dune_client.client import DuneClient
 
+'''
+# TODO: 
+1/ Try using polars (but need to set up local mac env)
+2/ Data pulled sometimes haas missing value for the day, do forward fill
+''' 
 
 # Endpoint for protocol details
 PROTOCOL_DETAILS_ENDPOINT = "https://api.llama.fi/protocol/{slug}"
@@ -60,7 +65,7 @@ def process_tvl_data(data: dict, cutoff_date: datetime) -> pd.DataFrame:
         for tvl_entry in chain_data.get("tvl", []):
             dateval = datetime.utcfromtimestamp(tvl_entry["date"]).date()
             
-            if dateval < cutoff_date:
+            if dateval < cutoff_date or dateval >= datetime.utcnow().date():
                 continue  # Filter out dates older than the cutoff
 
             protocol_name = data.get("name", "").split()[0].lower()
@@ -108,24 +113,50 @@ if __name__ == "__main__":
     # Concatenate all dataframes into one
     combined_tvl_df = pd.concat(all_tvl_data, ignore_index=True)
 
-    # # Save combined data to a single CSV file
-    # output_file = "./uploads/uniswap_tvl_defillama.csv"
-    # print(f"Saving combined data to {output_file}...")
-    # save_to_csv(combined_tvl_df, output_file)
+    # Ensure the 'date' column is in datetime format
+    combined_tvl_df['date'] = pd.to_datetime(combined_tvl_df['date'], errors='coerce')
+
+    # Create a separate DataFrame for weekly data (only include rows where the date is a Monday)
+    weekly_tvl_df = combined_tvl_df[combined_tvl_df['date'].dt.weekday == 0]
+
+    # Create a separate DataFrame for monthly data (only include rows where the date is the first of the month)
+    monthly_tvl_df = combined_tvl_df[combined_tvl_df['date'].dt.day == 1]
 
     # Convert DataFrame to CSV string
     combined_tvl_csv = combined_tvl_df.to_csv(index=False)
 
+    # Save weekly data to a CSV string
+    weekly_tvl_csv = weekly_tvl_df.to_csv(index=False)
+
+    # Save monthly data to a CSV string
+    monthly_tvl_csv = monthly_tvl_df.to_csv(index=False)
+
     # Step to delete the existing table before uploading new data
     delete_existing_table(dune, "uniswap_fnd", "dataset_uniswap_tvl_defillama")
+    delete_existing_table(dune, "uniswap_fnd", "dataset_uniswap_tvl_defillama_weekly")
+    delete_existing_table(dune, "uniswap_fnd", "dataset_uniswap_tvl_defillama_monthly")
 
     # Upload to Dune
     upload_success = dune.upload_csv(
         table_name="uniswap_tvl_defillama",
         data=combined_tvl_csv,
-        is_private=True
+        is_private=False
     )
-    print("Upload Successful:", upload_success)
+    print("Daily TVL upload Successful:", upload_success)
+
+    upload_success = dune.upload_csv(
+        table_name="uniswap_tvl_defillama_weekly",
+        data=weekly_tvl_csv,
+        is_private=False
+    )
+    print("Weekly TVL upload Successful:", upload_success)
+
+    upload_success = dune.upload_csv(
+        table_name="uniswap_tvl_defillama_monthly",
+        data=monthly_tvl_csv,
+        is_private=False
+    )
+    print("Monthly TVL upload Successful:", upload_success)
 
 
     end_time = time.time()
