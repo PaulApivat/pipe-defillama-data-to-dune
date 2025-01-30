@@ -92,7 +92,7 @@ def save_to_csv(df: pd.DataFrame, filename: str):
 
 
 if __name__ == "__main__":
-    SLUGS = ['uniswap-v1', 'uniswap-v2', 'uniswap-v3']
+    SLUGS = ['uniswap-v1', 'uniswap-v2', 'uniswap-v3', 'uniswap-v4']
     dune = get_dune_client()
     start_time = time.time()
 
