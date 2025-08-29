@@ -1,3 +1,6 @@
 
 .env
 .DS_Store
+
+output/tvl_data.json
+output/tvl_individual/
