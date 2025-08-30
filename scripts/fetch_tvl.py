@@ -1,9 +1,8 @@
 import polars as pl
-import requests
-import time
 from pathlib import Path
 import json
 from typing import List, Tuple, Set, Any
+from src.coreutils.request import new_session, get_data
 
 
 def load_metadata():
@@ -45,7 +44,7 @@ def load_existing_tvl(output_dir: Path) -> Tuple[List[Any], Set[str]]:
     return existing, existing_pool_ids
 
 
-def fetch_pool_tvl(pool_id: str, max_retries: int = 3) -> dict:
+def fetch_pool_tvl(pool_id: str, session) -> dict:
     """Fetch TVL data for a specific pool from the DeFiLlama API
 
     Returns a list of TVL data points with the following structure:
@@ -64,42 +63,28 @@ def fetch_pool_tvl(pool_id: str, max_retries: int = 3) -> dict:
     """
     url = f"https://yields.llama.fi/chart/{pool_id}"
 
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
+    try:
+        response_data = get_data(session, url)
 
-            response_data = response.json()
+        # Handle the API response structure
+        if response_data.get("status") == "success" and "data" in response_data:
+            tvl_data = response_data["data"]
 
-            # Handle the API response structure
-            if response_data.get("status") == "success" and "data" in response_data:
-                tvl_data = response_data["data"]
+            # Add pool_id to each data point
+            for item in tvl_data:
+                item["pool_id"] = pool_id
 
-                # Add pool_id to each data point
-                for item in tvl_data:
-                    item["pool_id"] = pool_id
+            return tvl_data
+        else:
+            print(f"Unexpected API response structure for pool {pool_id}")
+            return {
+                "pool_id": pool_id,
+                "error": "Unexpected API response structure",
+            }
 
-                return tvl_data
-            else:
-                print(f"Unexpected API response structure for pool {pool_id}")
-                return {
-                    "pool_id": pool_id,
-                    "error": "Unexpected API response structure",
-                }
-
-        except requests.exceptions.RequestException as e:
-            if attempt == max_retries - 1:
-                print(
-                    f"Failed to fetch data for pool {pool_id} after {max_retries} attempts: {e}"
-                )
-                return {"pool_id": pool_id, "error": str(e)}
-            else:
-                print(f"Attempt {attempt + 1} failed for pool {pool_id}, retrying...")
-                time.sleep(2**attempt)  # Exponential backoff
-
-        except Exception as e:
-            print(f"Unexpected error fetching data for pool {pool_id}: {e}")
-            return {"pool_id": pool_id, "error": str(e)}
+    except Exception as e:
+        print(f"Failed to fetch data for pool {pool_id}: {e}")
+        return {"pool_id": pool_id, "error": str(e)}
 
 
 def main():
@@ -112,6 +97,9 @@ def main():
     # Create output directory if it doesn't exist
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
+
+    # Create HTTP session with retry strategy
+    session = new_session()
 
     # Load existing results (resume capability)
     all_tvl_data, existing_pool_ids = load_existing_tvl(output_dir)
@@ -140,7 +128,7 @@ def main():
             f"[{idx + 1}/{metadata_df.shape[0]}] Fetching TVL for {protocol} - {symbol} ({chain}) - {pool_id}"
         )
 
-        tvl_data = fetch_pool_tvl(pool_id)
+        tvl_data = fetch_pool_tvl(pool_id, session)
 
         if "error" not in tvl_data:
             successful_fetches += 1
@@ -149,8 +137,7 @@ def main():
         else:
             failed_fetches += 1
 
-        # Add a small delay to be respectful to the API
-        time.sleep(0.1)
+        # Rate limiting is now handled in get_data() function
 
     print(f"\nFetching complete!")
     print(f"Successful (new this run): {successful_fetches}")
