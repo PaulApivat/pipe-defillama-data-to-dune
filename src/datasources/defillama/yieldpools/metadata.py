@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import date
 import polars as pl
-from src.coreutils.request import get_data
+from src.coreutils.request import new_session, get_data
 
 YIELD_POOLS_ENDPOINT = "https://yields.llama.fi/pools"
 
@@ -12,8 +12,14 @@ class YieldPoolsMetadata:
 
     @classmethod
     def fetch(cls) -> "YieldPoolsMetadata":
-        response = get_data(YIELD_POOLS_ENDPOINT)
-        return cls.of(data=response["data"], process_dt=date.today())
+        # Create a new session for this fetch operation
+        session = new_session()
+        try:
+            response = get_data(session, YIELD_POOLS_ENDPOINT)
+            return cls.of(data=response["data"], process_dt=date.today())
+        finally:
+            # Clean up the session
+            session.close()
 
     @classmethod
     def of(cls, data: list[dict], process_dt: date) -> "YieldPoolsMetadata":

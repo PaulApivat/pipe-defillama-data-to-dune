@@ -3,6 +3,10 @@ from pathlib import Path
 import json
 from typing import List, Tuple, Set, Any
 from src.coreutils.request import new_session, get_data
+from src.datasources.defillama.yieldpools.schemas import (
+    validate_tvl_response,
+    TVLDataPoint,
+)
 
 
 def load_metadata():
@@ -66,21 +70,24 @@ def fetch_pool_tvl(pool_id: str, session) -> dict:
     try:
         response_data = get_data(session, url)
 
-        # Handle the API response structure
-        if response_data.get("status") == "success" and "data" in response_data:
-            tvl_data = response_data["data"]
-
-            # Add pool_id to each data point
-            for item in tvl_data:
-                item["pool_id"] = pool_id
-
-            return tvl_data
-        else:
-            print(f"Unexpected API response structure for pool {pool_id}")
+        # Validate API response structure using Pydantic schema
+        try:
+            tvl_response = validate_tvl_response(response_data)
+        except Exception as validation_error:
+            print(f"Schema validation failed for pool {pool_id}: {validation_error}")
             return {
                 "pool_id": pool_id,
-                "error": "Unexpected API response structure",
+                "error": f"Schema validation failed: {str(validation_error)}",
             }
+
+        # Add pool_id to each data point
+        tvl_data = []
+        for item in tvl_response.data:
+            item_dict = item.dict()
+            item_dict["pool_id"] = pool_id
+            tvl_data.append(item_dict)
+
+        return tvl_data
 
     except Exception as e:
         print(f"Failed to fetch data for pool {pool_id}: {e}")
