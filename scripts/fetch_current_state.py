@@ -94,12 +94,12 @@ def main():
     project_counts = (
         filtered_state.df.select("protocol_slug")
         .group_by("protocol_slug")
-        .count()
-        .sort("count", descending=True)
+        .len()
+        .sort("len", descending=True)
     )
     print("\n📊 Project distribution:")
     for row in project_counts.iter_rows(named=True):
-        print(f"  {row['protocol_slug']}: {row['count']} pools")
+        print(f"  {row['protocol_slug']}: {row['len']} pools")
 
     # Save to JSON for inspection and future use
     output_path = "output/current_state.json"

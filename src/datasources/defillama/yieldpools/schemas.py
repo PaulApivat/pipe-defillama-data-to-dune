@@ -83,7 +83,9 @@ class PoolMetadata(BaseModel):
         None, description="Project factorized value"
     )
     chain_factorized: Optional[int] = Field(None, description="Chain factorized value")
-    predictions: Optional[Dict[str, Any]] = Field(None, description="ML predictions")
+    predictions: Optional[str] = Field(
+        None, description="ML predictions as JSON string"
+    )
     pool_old: Optional[str] = Field(None, description="Legacy pool identifier")
 
     @validator("dt")
