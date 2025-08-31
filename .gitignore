@@ -4,3 +4,5 @@
 
 output/tvl_data.json
 output/tvl_individual/
+output/current_state.json
+output/current_state.parquet
