@@ -1,3 +1,54 @@
 
 .env
 .DS_Store
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Data files (generated outputs)
+output/tvl_data.json
+output/tvl_data.parquet
+output/tvl_individual/
+output/metadata.json
+output/current_state.json
+output/current_state.parquet
+output/tvl_data_for_dune.csv
+output/current_state_for_dune.csv
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# OS generated files
+Thumbs.db
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
