@@ -1,9 +1,9 @@
 name: Get Uniswap TVL from DefiLlama and upload it to Dune
 
 on:
-  push:
-    branches:
-      - main
+  # push:
+  #  branches:
+  #    - main
   schedule:
     - cron: "0 10 * * *"
 
