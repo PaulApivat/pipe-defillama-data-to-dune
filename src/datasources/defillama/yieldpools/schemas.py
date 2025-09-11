@@ -1,5 +1,6 @@
 from datetime import datetime, date
 from typing import List, Optional, Union, Dict, Any
+import json
 from pydantic import BaseModel, Field, validator
 
 
@@ -257,6 +258,59 @@ TVL_SCHEMA = pl.Schema(
 
 
 # =============================================================================
+# Protocol Schemas (for /protocols endpoint)
+# =============================================================================
+
+
+class ProtocolData(BaseModel):
+    """Schema for individual protocol data from Defillama"""
+
+    id: str = Field(..., description="Protocol unique identifier")
+    name: str = Field(..., description="Protocol name")
+    address: str = Field(..., description="Protocol token contract address")
+    symbol: str = Field(..., description="Protocol symbol")
+    category: Optional[str] = Field(None, description="Protocol category")
+    chains: Optional[List[str]] = Field(
+        default_factory=list, description="Supported chains"
+    )
+    slug: str = Field(..., description="Protocol slug")
+    tvl: Optional[float] = Field(None, description="Total Value Locked in USD")
+    chainTvls: Optional[Dict[str, float]] = Field(
+        default_factory=dict, description="TVL breakdown by chain"
+    )
+
+    @validator("tvl")
+    def validate_tvl(cls, v):
+        """Validate TVL is non-negative if present"""
+        if v is not None and v < 0:
+            raise ValueError("TVL must be non-negative")
+        return v
+
+    @validator("chains")
+    def validate_chains(cls, v):
+        """Ensure chains is a list of strings if present"""
+        if v is not None and not isinstance(v, list):
+            raise ValueError("Chains must be a list")
+        return v or []
+
+
+# Polars Schema for Protocols
+PROTOCOL_SCHEMA = pl.Schema(
+    [
+        ("id", pl.String()),
+        ("name", pl.String()),
+        ("address", pl.String()),
+        ("symbol", pl.String()),
+        ("category", pl.String()),
+        ("chains", pl.String()),
+        ("slug", pl.String()),
+        ("tvl", pl.Float64()),
+        ("chainTvls", pl.String()),  # JSON string for complex nested data
+    ]
+)
+
+
+# =============================================================================
 # Utility Functions
 # =============================================================================
 
@@ -281,3 +335,17 @@ def tvl_to_polars(tvl: TVLResponse) -> pl.DataFrame:
     """Convert validated TVL data to Polars DataFrame"""
     records = [point.dict() for point in tvl.data]
     return pl.DataFrame(records, schema=TVL_SCHEMA)
+
+
+def protocols_to_polars(protocols: List[ProtocolData]) -> pl.DataFrame:
+    """Convert validated protocols data to Polars DataFrame"""
+    records = []
+    for protocol in protocols:
+        record = protocol.dict()
+        record["chains"] = json.dumps(record["chains"]) if record["chains"] else None
+        record["chainTvls"] = (
+            json.dumps(record["chainTvls"]) if record["chainTvls"] else None
+        )
+        records.append(record)
+
+    return pl.DataFrame(records, schema=PROTOCOL_SCHEMA)
