@@ -33,6 +33,7 @@ output/current_state.json
 output/current_state.parquet
 output/tvl_data_for_dune.csv
 output/current_state_for_dune.csv
+output/protocols.json
 
 # Logs
 *.log
