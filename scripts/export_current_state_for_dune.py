@@ -20,7 +20,6 @@ def export_current_state_for_dune():
         # Load current state data
         current_state_query = """
             SELECT 
-                dt,
                 pool,
                 protocol_slug,
                 chain,
@@ -28,34 +27,10 @@ def export_current_state_for_dune():
                 underlying_tokens,
                 reward_tokens,
                 timestamp,
-                pool_meta,
                 tvl_usd,
                 apy,
                 apy_base,
                 apy_reward,
-                il_7d,
-                apy_base_7d,
-                volume_usd_1d,
-                volume_usd_7d,
-                apy_base_inception,
-                url,
-                apy_pct_1d,
-                apy_pct_7d,
-                apy_pct_30d,
-                apy_mean_30d,
-                stablecoin,
-                il_risk,
-                exposure,
-                return_value,
-                count,
-                apy_mean_expanding,
-                apy_std_expanding,
-                mu,
-                sigma,
-                outlier,
-                project_factorized,
-                chain_factorized,
-                predictions,
                 pool_old
             FROM read_parquet('output/current_state.parquet')
         """
@@ -103,16 +78,6 @@ def export_current_state_for_dune():
                     return_dtype=pl.Utf8,
                 )
                 .alias("reward_tokens_json"),
-                pl.col("predictions")
-                .map_elements(
-                    lambda x: (
-                        json.dumps(x.to_dict() if hasattr(x, "to_dict") else x)
-                        if x is not None
-                        else None
-                    ),
-                    return_dtype=pl.Utf8,
-                )
-                .alias("predictions_json"),
             ]
         )
 
@@ -122,20 +87,6 @@ def export_current_state_for_dune():
             "apy",
             "apy_base",
             "apy_reward",
-            "il_7d",
-            "apy_base_7d",
-            "volume_usd_1d",
-            "volume_usd_7d",
-            "apy_base_inception",
-            "apy_pct_1d",
-            "apy_pct_7d",
-            "apy_pct_30d",
-            "apy_mean_30d",
-            "return_value",
-            "apy_mean_expanding",
-            "apy_std_expanding",
-            "mu",
-            "sigma",
         ]
 
         # create scaled and original versions for numeric fields
@@ -152,26 +103,8 @@ def export_current_state_for_dune():
         if numeric_expressions:
             df = df.with_columns(numeric_expressions)
 
-        # convert integer fields
-        int_fields = ["count", "project_factorized", "chain_factorized"]
-        int_expressions = []
-        for field in int_fields:
-            if field in df.columns:
-                int_expressions.append(pl.col(field).cast(pl.Int64))
-
-        # convert boolean fields
-        bool_fields = ["stablecoin", "outlier"]
-        bool_expressions = []
-        for field in bool_fields:
-            if field in df.columns:
-                bool_expressions.append(pl.col(field).cast(pl.Boolean))
-
-        if bool_expressions:
-            df = df.with_columns(bool_expressions)
-
         # create final export DataFrame with all columns
         base_columns = [
-            "dt",
             "pool",
             "protocol_slug",
             "chain",
@@ -179,17 +112,7 @@ def export_current_state_for_dune():
             "underlying_tokens_json",
             "reward_tokens_json",
             "timestamp",
-            "pool_meta",
-            "url",
-            "il_risk",
-            "exposure",
             "pool_old",
-            "stablecoin",
-            "outlier",
-            "count",
-            "project_factorized",
-            "chain_factorized",
-            "predictions_json",
         ]
 
         # add scaled numeric columns
@@ -225,7 +148,7 @@ def export_current_state_for_dune():
         # Display sample data
         print("\n📋 Sample current state data:")
         sample_cols = [
-            "dt",
+            "timestamp",
             "pool",
             "protocol_slug",
             "chain",

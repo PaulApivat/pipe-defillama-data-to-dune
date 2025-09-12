@@ -92,19 +92,11 @@ def perform_join(conn):
             current.symbol,
             current.underlying_tokens,
             current.reward_tokens,
-            current.pool_meta,
             current.pool_old,
             current.tvl_usd as current_tvl_usd,
             current.apy as current_apy,
             current.apy_base as current_apy_base,
             current.apy_reward as current_apy_reward,
-            current.volume_usd_1d,
-            current.volume_usd_7d,
-            current.stablecoin,
-            current.il_risk,
-            current.exposure,
-            current.outlier,
-            current.predictions
             
         FROM tvl_data tvl
         LEFT JOIN current_state current 
