@@ -1,6 +1,8 @@
 dune-client
+duckdb
 pyyaml
 python-dotenv
 pandas
 polars
 pydantic
+pyarrow

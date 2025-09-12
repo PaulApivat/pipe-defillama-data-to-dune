@@ -5,6 +5,7 @@ This replaces the old metadata approach with enhanced current state data.
 """
 
 import polars as pl
+from datetime import date
 from src.datasources.defillama.yieldpools.pools_old import YieldPoolsCurrentState
 from src.datasources.defillama.yieldpools.schemas import (
     validate_metadata_response,
@@ -36,7 +37,6 @@ def main():
         metadata_dict = {
             "pools": [
                 {
-                    "dt": row["dt"],
                     "pool": row["pool"],
                     "protocol_slug": row["protocol_slug"],
                     "chain": row["chain"],
@@ -44,34 +44,10 @@ def main():
                     "underlying_tokens": row["underlying_tokens"],
                     "reward_tokens": row["reward_tokens"],
                     "timestamp": row["timestamp"],
-                    "pool_meta": row["pool_meta"],
                     "tvl_usd": row["tvl_usd"],
                     "apy": row["apy"],
                     "apy_base": row["apy_base"],
                     "apy_reward": row["apy_reward"],
-                    "il_7d": row["il_7d"],
-                    "apy_base_7d": row["apy_base_7d"],
-                    "volume_usd_1d": row["volume_usd_1d"],
-                    "volume_usd_7d": row["volume_usd_7d"],
-                    "apy_base_inception": row["apy_base_inception"],
-                    "url": row["url"],
-                    "apy_pct_1d": row["apy_pct_1d"],
-                    "apy_pct_7d": row["apy_pct_7d"],
-                    "apy_pct_30d": row["apy_pct_30d"],
-                    "apy_mean_30d": row["apy_mean_30d"],
-                    "stablecoin": row["stablecoin"],
-                    "il_risk": row["il_risk"],
-                    "exposure": row["exposure"],
-                    "return_value": row["return_value"],
-                    "count": row["count"],
-                    "apy_mean_expanding": row["apy_mean_expanding"],
-                    "apy_std_expanding": row["apy_std_expanding"],
-                    "mu": row["mu"],
-                    "sigma": row["sigma"],
-                    "outlier": row["outlier"],
-                    "project_factorized": row["project_factorized"],
-                    "chain_factorized": row["chain_factorized"],
-                    "predictions": row["predictions"],
                     "pool_old": row["pool_old"],
                 }
                 for row in current_state.df.iter_rows(named=True)
@@ -102,12 +78,13 @@ def main():
         print(f"  {row['protocol_slug']}: {row['len']} pools")
 
     # Save to JSON for inspection and future use
-    output_path = "output/current_state.json"
-    filtered_state.to_json(output_path)
-    print(f"\n💾 Saved enhanced metadata to {output_path}")
+    today = date.today().strftime("%Y-%m-%d")
+    json_path = f"output/current_state_{today}.json"
+    filtered_state.to_json(json_path)
+    print(f"\n💾 Saved enhanced metadata to {json_path}")
 
     # Also save as Parquet for future use (much smaller file size)
-    parquet_path = "output/current_state.parquet"
+    parquet_path = f"output/current_state_{today}.parquet"
     filtered_state.to_parquet(parquet_path)
     print(f"💾 Saved enhanced metadata to {parquet_path}")
 
