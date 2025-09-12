@@ -6,8 +6,15 @@ Converts data types, handles list columns and formats timestamps for Dune.
 import duckdb
 import polars as pl
 from pathlib import Path
-from datetime import datetime
+from datetime import date, datetime
 import json
+
+
+def transform_pool_old(df):
+    """Transform pool_old column to remove chain suffix"""
+    return df.with_columns(
+        [pl.col("pool_old").str.split("-").list.get(0).alias("pool_old_clean")]
+    )
 
 
 def export_current_state_for_dune():
@@ -16,9 +23,12 @@ def export_current_state_for_dune():
 
     conn = duckdb.connect(":memory:")
 
+    # Get today's date for filename
+    today = date.today().strftime("%Y-%m-%d")
+
     try:
         # Load current state data
-        current_state_query = """
+        current_state_query = f"""
             SELECT 
                 pool,
                 protocol_slug,
@@ -32,10 +42,11 @@ def export_current_state_for_dune():
                 apy_base,
                 apy_reward,
                 pool_old
-            FROM read_parquet('output/current_state.parquet')
+            FROM read_parquet('output/current_state_{today}.parquet')
         """
 
         df = conn.execute(current_state_query).pl()
+        df = transform_pool_old(df)
         print(f"✅ Loaded {df.shape[0]:,} current state records")
 
         # data type conversion
@@ -44,10 +55,6 @@ def export_current_state_for_dune():
         # convert timestamps
         df = df.with_columns(
             [
-                # Convert date to timestamp with timezone for Dune compatibility
-                pl.col("dt")
-                .str.strptime(pl.Date, "%Y-%m-%d")
-                .dt.strftime("%Y-%m-%dT00:00:00Z"),  # ✅ ISO 8601 with timezone
                 # Convert timestamp to Dune-compatible format (keep timezone info)
                 pl.col("timestamp")
                 .str.strptime(pl.Datetime, "%Y-%m-%dT%H:%M:%S%.3fZ")
@@ -81,28 +88,6 @@ def export_current_state_for_dune():
             ]
         )
 
-        # convert numeric fields to INT256 (scale by 1e6 for precision)
-        numeric_fields = [
-            "tvl_usd",
-            "apy",
-            "apy_base",
-            "apy_reward",
-        ]
-
-        # create scaled and original versions for numeric fields
-        numeric_expressions = []
-        for field in numeric_fields:
-            if field in df.columns:
-                numeric_expressions.extend(
-                    [
-                        (pl.col(field) * 1e6).cast(pl.Int64).alias(f"{field}_scaled"),
-                        pl.col(field).alias(f"{field}_original"),
-                    ]
-                )
-
-        if numeric_expressions:
-            df = df.with_columns(numeric_expressions)
-
         # create final export DataFrame with all columns
         base_columns = [
             "pool",
@@ -112,33 +97,17 @@ def export_current_state_for_dune():
             "underlying_tokens_json",
             "reward_tokens_json",
             "timestamp",
+            "tvl_usd",
+            "apy",
+            "apy_base",
+            "apy_reward",
             "pool_old",
+            "pool_old_clean",
         ]
 
-        # add scaled numeric columns
-        all_export_columns = base_columns.copy()
-        for field in numeric_fields:
-            if field in df.columns:
-                all_export_columns.extend([f"{field}_scaled", f"{field}_original"])
-
-        # Filter to only existing columns and create select expressions with proper naming
-        select_expressions = []
-        for col in all_export_columns:
-            if col in df.columns:
-                # Rename scaled columns to _int256 and original columns to _float for consistency
-                if col.endswith("_scaled"):
-                    base_name = col.replace("_scaled", "")
-                    select_expressions.append(pl.col(col).alias(f"{base_name}_int256"))
-                elif col.endswith("_original"):
-                    base_name = col.replace("_original", "")
-                    select_expressions.append(pl.col(col).alias(f"{base_name}_float"))
-                else:
-                    select_expressions.append(pl.col(col))
-
-        export_df = df.select(select_expressions)
-
         # save to CSV
-        output_path = Path("output/current_state_for_dune.csv")
+        export_df = df.select(base_columns)
+        output_path = Path(f"output/current_state_for_dune_{today}.csv")
         export_df.write_csv(output_path)
 
         print(f"✅ Exported current state data to {output_path}")
@@ -153,8 +122,12 @@ def export_current_state_for_dune():
             "protocol_slug",
             "chain",
             "symbol",
-            "tvl_usd_float",
-            "apy_float",
+            "tvl_usd",
+            "apy",
+            "apy_base",
+            "apy_reward",
+            "pool_old",
+            "pool_old_clean",
         ]
         sample_cols = [col for col in sample_cols if col in export_df.columns]
         print(export_df.select(sample_cols).head(3))
