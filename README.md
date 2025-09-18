@@ -4,6 +4,7 @@ A pipeline that extracts Pool TVL and APY data from DeFiLlama APIs and prepares 
 
 ## Architecture Overview
 
+- **Functional Pipeline**: Method chaining for composable data transformations
 - **Modular Design**: Separation of concerns with clear boundaries
 - **Schema-First**: Pydantic validation and Polars schemas
 - **Reliability**: Exponential backoff, retry logic, and idempotent operations
@@ -24,17 +25,18 @@ pipe-defillama-data-to-dune/
 │   └── datasources/              # Data source implementations
 │       └── defillama/
 │           └── yieldpools/
-│               ├── schemas.py      # Pydantic & Polars schemas
-│               ├── metadata.py     # Legacy metadata handler
-│               └── pools_old.py    # Current state data handler
+│               ├── schemas.py         # Pydantic & Polars schemas
+│               ├── current_state.py   # Current state data handler (primary)
+│               ├── historical_tvl.py  # Historical TVL data handler (primary)
+│               └── metadata.py        # Legacy metadata handler (deprecated)
 ├── scripts/                        
-│   ├── fetch_yields.py                        # Fetch yield pool metadata
-│   ├── fetch_tvl.py                           # Fetch historical TVL data
-│   ├── fetch_current_state.py                 # Fetch current pool state
-│   ├── export_tvl_for_dune.py                 # Export TVL data for Dune
-│   ├── export_current_state_for_dune.py       # Export current state for Dune
-│   ├── convert_tvl_to_parquet.py              # Convert JSON to Parquet
-│   └── join_and_enrich_data.py                # Data joining and enrichment
+│   ├── fetch_current_state.py                 # Fetch current pool state (PRIMARY)
+│   ├── fetch_tvl.py                           # Fetch historical TVL data (PRIMARY)
+│   ├── export_current_state_for_dune.py       # Export current state for Dune (PRIMARY)
+│   ├── export_tvl_for_dune.py                 # Export TVL data for Dune (PRIMARY)
+│   ├── fetch_yields.py                        # Fetch yield pool metadata (legacy)
+│   ├── convert_tvl_to_parquet.py              # Convert JSON to Parquet (utility)
+│   └── join_and_enrich_data.py                # Data joining and enrichment (utility)
 ├── notebooks/                    
 │   └── defillama_data_quality_checks.ipynb
 ├── output/                          # Generated data files (gitignored)
@@ -48,6 +50,29 @@ pipe-defillama-data-to-dune/
 │   └── dune_upload_guide.md         # Dune Analytics integration guide
 └── requirements.txt                           # Python dependencies
 ```
+
+## Primary Operations
+
+This pipeline focuses on two main data flows:
+
+### 1. **Current State Data** (Dimension Table)
+- **File**: `src/datasources/defillama/yieldpools/current_state.py`
+- **Class**: `YieldPoolsCurrentState`
+- **Script**: `scripts/fetch_current_state.py`
+- **Purpose**: Fetches current pool metadata, TVL, and APY data
+- **Output**: `output/current_state_YYYY-MM-DD.parquet`
+
+### 2. **Historical TVL Data** (Fact Table)
+- **File**: `src/datasources/defillama/yieldpools/historical_tvl.py`
+- **Class**: `YieldPoolsTVLFact`
+- **Script**: `scripts/fetch_tvl.py`
+- **Purpose**: Fetches historical time-series TVL and APY data
+- **Output**: `output/tvl_data_YYYY-MM-DD.parquet`
+
+### 3. **Dune Analytics Export**
+- **Scripts**: `export_current_state_for_dune.py`, `export_tvl_for_dune.py`
+- **Purpose**: Transform and export data for Dune Analytics consumption
+- **Output**: `output/*_for_dune.csv`
 
 ## Quick Start
 
@@ -74,18 +99,40 @@ pip install -r requirements.txt
 ### Basic Usage
 
 ```bash
-# 1. Fetch current pool state data
+# 1. Fetch current pool state data (PRIMARY)
 python -m scripts.fetch_current_state
 
-# 2. Fetch historical TVL data
+# 2. Fetch historical TVL data (PRIMARY)
 python -m scripts.fetch_tvl
 
-# 3. Export data for Dune Analytics
-python -m scripts.export_tvl_for_dune
+# 3. Export data for Dune Analytics (PRIMARY)
 python -m scripts.export_current_state_for_dune
+python -m scripts.export_tvl_for_dune
 
 # 4. Explore data quality
 jupyter notebook notebooks/defillama_data_quality_checks.ipynb
+```
+
+### Functional Pipeline Example
+
+The pipeline uses method chaining for composable data transformations:
+
+```python
+# Current State Pipeline
+current_state = (
+    YieldPoolsCurrentState.fetch()
+    .filter_by_projects(TARGET_PROJECTS)
+    .transform_pool_old()
+    .validate_schema(METADATA_SCHEMA)
+    .sort_by_tvl(descending=True)
+)
+
+# Historical TVL Pipeline
+tvl_data = (
+    YieldPoolsTVLFact.fetch_incremental_tvl(metadata_source=metadata)
+    .validate_schema()
+    .sort_by_timestamp(descending=False)
+)
 ```
 
 ## Data Model
@@ -95,7 +142,7 @@ jupyter notebook notebooks/defillama_data_quality_checks.ipynb
 **Fact Table: `tvl_data`**
 - Historical TVL and APY data over time
 - Primary key: `(pool_id, timestamp)`
-- Measures: `tvlUsd`, `apy`, `apyBase`, `apyReward`
+- Measures: `tvl_usd`, `apy`, `apy_base`, `apy_reward`
 
 **Dimension Table: `current_state`**
 - Current pool metadata and state
@@ -104,32 +151,31 @@ jupyter notebook notebooks/defillama_data_quality_checks.ipynb
 
 ### Data Dictionary
 
-#### TVL Data (Fact Table)
+#### TVL Data (Fact Table) - `TVL_SCHEMA`
 | Column | Type | Description |
 |--------|------|-------------|
-| `timestamp` | TIMESTAMP | Data point timestamp (ISO 8601) |
-| `pool_id` | VARCHAR | Unique pool identifier |
-| `tvlUsd` | FLOAT | Total Value Locked in USD |
-| `apy` | FLOAT | Annual Percentage Yield |
-| `apyBase` | FLOAT | Base APY (without rewards) |
-| `apyReward` | FLOAT | Reward APY component |
+| `timestamp` | STRING | Data point timestamp (ISO 8601) |
+| `tvl_usd` | FLOAT64 | Total Value Locked in USD |
+| `apy` | FLOAT64 | Annual Percentage Yield |
+| `apy_base` | FLOAT64 | Base APY (without rewards) |
+| `apy_reward` | FLOAT64 | Reward APY component |
+| `pool_id` | STRING | Unique pool identifier |
 
-#### Current State (Dimension Table)
+#### Current State (Dimension Table) - `METADATA_SCHEMA`
 | Column | Type | Description |
 |--------|------|-------------|
-| `pool` | VARCHAR | Pool identifier (join key) |
-| `protocol_slug` | VARCHAR | Protocol name (e.g., 'curve-dex') |
-| `chain` | VARCHAR | Blockchain network |
-| `symbol` | VARCHAR | Pool symbol (e.g., 'WETH-USDC') |
-| `pool_old` | VARCHAR | Legacy pool address |
-| `tvl_usd` | FLOAT | Current TVL in USD |
-| `apy` | FLOAT | Current APY |
-| `stablecoin` | BOOLEAN | Whether pool contains stablecoins |
-| `il_risk` | VARCHAR | Impermanent loss risk level |
-| `exposure` | VARCHAR | Exposure type (single/multi) |
-| `underlying_tokens` | JSON | List of underlying token addresses |
-| `reward_tokens` | JSON | List of reward token addresses |
-| `predictions` | JSON | ML predictions and confidence |
+| `pool` | STRING | Pool identifier (join key) |
+| `protocol_slug` | STRING | Protocol name (e.g., 'curve-dex') |
+| `chain` | STRING | Blockchain network |
+| `symbol` | STRING | Pool symbol (e.g., 'WETH-USDC') |
+| `underlying_tokens` | LIST[STRING] | List of underlying token addresses |
+| `reward_tokens` | LIST[STRING] | List of reward token addresses |
+| `timestamp` | STRING | ISO 8601 timestamp of current state |
+| `tvl_usd` | FLOAT64 | Current Total Value Locked in USD |
+| `apy` | FLOAT64 | Current Annual Percentage Yield |
+| `apy_base` | FLOAT64 | Current Base APY (without rewards) |
+| `apy_reward` | FLOAT64 | Current Reward APY |
+| `pool_old` | STRING | Legacy pool identifier |
 
 ## Key Features
 
@@ -151,7 +197,10 @@ jupyter notebook notebooks/defillama_data_quality_checks.ipynb
 - **Parquet**: Columnar storage for efficient compression
 - **Lazy Evaluation**: Optimized query execution
 
-### 4. **Data Engineering Best Practices**
+### 4. **Functional Programming & Data Engineering Best Practices**
+- **Method Chaining**: Composable data transformations with `.pipe()` operations
+- **Immutable Operations**: Each transformation returns a new instance
+- **Pure Functions**: Predictable, testable data processing functions
 - **Separation of Concerns**: Clear module boundaries
 - **DRY Principle**: Reusable utilities and functions
 - **Configuration Management**: Environment-based settings

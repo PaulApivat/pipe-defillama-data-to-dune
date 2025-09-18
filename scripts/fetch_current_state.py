@@ -6,11 +6,12 @@ This replaces the old metadata approach with enhanced current state data.
 
 import polars as pl
 from datetime import date
-from src.datasources.defillama.yieldpools.pools_old import YieldPoolsCurrentState
-from src.datasources.defillama.yieldpools.schemas import (
-    validate_metadata_response,
-    metadata_to_polars,
-)
+from src.datasources.defillama.yieldpools.current_state import YieldPoolsCurrentState
+from src.datasources.defillama.yieldpools.schemas import METADATA_SCHEMA
+from src.coreutils.logging import setup_logging
+
+
+logger = setup_logging()
 
 # Same target projects as fetch_yields.py
 TARGET_PROJECTS = {
@@ -22,80 +23,52 @@ TARGET_PROJECTS = {
 }
 
 
-def main():
-    """Fetch current state data for all pools and filter by target projects"""
-    print("🔄 Fetching current state data from DeFiLlama PoolsOld API...")
+def fetch_current_state():
+    """Fetch current state data for all pools, filtered by target projects."""
+    logger.info("🔄 Fetching current state data from DeFiLlama PoolsOld API...")
 
-    # Fetch current state data for all pools
-    current_state = YieldPoolsCurrentState.fetch()
-    print(f"✅ Fetched {current_state.df.shape[0]} total pools")
-
-    # Validate the data using our enhanced schema
     try:
-        # Convert the DataFrame back to the format expected by our schema
-        # This validates that the data structure matches our expectations
-        metadata_dict = {
-            "pools": [
-                {
-                    "pool": row["pool"],
-                    "protocol_slug": row["protocol_slug"],
-                    "chain": row["chain"],
-                    "symbol": row["symbol"],
-                    "underlying_tokens": row["underlying_tokens"],
-                    "reward_tokens": row["reward_tokens"],
-                    "timestamp": row["timestamp"],
-                    "tvl_usd": row["tvl_usd"],
-                    "apy": row["apy"],
-                    "apy_base": row["apy_base"],
-                    "apy_reward": row["apy_reward"],
-                    "pool_old": row["pool_old"],
-                }
-                for row in current_state.df.iter_rows(named=True)
-            ]
-        }
-
-        # Validate using our enhanced schema
-        validated_metadata = validate_metadata_response(metadata_dict)
-        print(f"✅ Schema validation passed for {len(validated_metadata.pools)} pools")
-
-    except Exception as validation_error:
-        print(f"❌ Schema validation failed: {validation_error}")
-        print("Continuing with unvalidated data...")
-
-    # Filter for target projects
-    filtered_state = current_state.filter_by_projects(TARGET_PROJECTS)
-    print(f"🎯 Filtered to {filtered_state.df.shape[0]} pools from target projects")
-
-    # Show project distribution
-    project_counts = (
-        filtered_state.df.select("protocol_slug")
-        .group_by("protocol_slug")
-        .len()
-        .sort("len", descending=True)
-    )
-    print("\n📊 Project distribution:")
-    for row in project_counts.iter_rows(named=True):
-        print(f"  {row['protocol_slug']}: {row['len']} pools")
-
-    # Save to JSON for inspection and future use
-    today = date.today().strftime("%Y-%m-%d")
-    json_path = f"output/current_state_{today}.json"
-    filtered_state.to_json(json_path)
-    print(f"\n💾 Saved enhanced metadata to {json_path}")
-
-    # Also save as Parquet for future use (much smaller file size)
-    parquet_path = f"output/current_state_{today}.parquet"
-    filtered_state.to_parquet(parquet_path)
-    print(f"💾 Saved enhanced metadata to {parquet_path}")
-
-    # Show some sample data
-    print(f"\n📋 Sample data (first 3 pools):")
-    sample_df = filtered_state.df.head(3)
-    for row in sample_df.iter_rows(named=True):
-        print(
-            f"  {row['symbol']} ({row['chain']}) - TVL: ${row['tvl_usd']:,.0f}, APY: {row['apy']:.2f}%"
+        # create instance and apply functional pipeline
+        current_state = (
+            YieldPoolsCurrentState.fetch()
+            .filter_by_projects(TARGET_PROJECTS)
+            .transform_pool_old()
+            .validate_schema(METADATA_SCHEMA)
+            .sort_by_tvl(descending=True)
         )
+
+        # Get summary stats
+        stats = current_state.get_summary_stats()
+        logger.info(f"✅ Processed {stats['total_pools']} pools")
+        logger.info(f"   Protocols: {stats['protocol_slug_unique']}")
+        logger.info(f"   Chains: {stats['chain_unique']}")
+        logger.info(f"   Symbols: {stats['symbol_unique']}")
+        logger.info(
+            f"   Underlying Tokens: {stats['underlying_tokens_avg_count']} (avg), {stats['underlying_tokens_max_count']} (max)"
+        )
+        logger.info(
+            f"   Reward Tokens: {stats['reward_tokens_avg_count']} (avg), {stats['reward_tokens_max_count']} (max)"
+        )
+        logger.info(f"   Timestamps: {stats['timestamp_unique']}")
+        logger.info(f"   Total TVL: ${stats['tvl_usd_sum']:,.0f}")
+        logger.info(f"   Average APY: {stats['apy_mean']:.2f}%")
+        logger.info(f"   Average APY Base: {stats['apy_base_mean']:.2f}%")
+        logger.info(f"   Average APY Reward: {stats['apy_reward_mean']:.2f}%")
+        logger.info(f"   Pool Old: {stats['pool_old_unique']}")
+
+        # Save data
+        today = date.today().strftime("%Y-%m-%d")
+        current_state.to_parquet(f"output/current_state_{today}.parquet")
+        current_state.to_json(f"output/current_state_{today}.json")
+
+        logger.info(f"✅ Data saved to output/current_state_{today}.*")
+
+        return current_state
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching current state data: {e}")
+        raise
 
 
 if __name__ == "__main__":
-    main()
+    fetch_current_state()
