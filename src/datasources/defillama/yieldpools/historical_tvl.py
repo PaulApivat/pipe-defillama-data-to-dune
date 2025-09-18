@@ -7,7 +7,9 @@ from typing import Callable, Optional, Union, List, Dict, TYPE_CHECKING
 import logging
 
 if TYPE_CHECKING:
-    from src.datasources.defillama.yieldpools.pools_old import YieldPoolsCurrentState
+    from src.datasources.defillama.yieldpools.current_state import (
+        YieldPoolsCurrentState,
+    )
 
 
 @dataclass

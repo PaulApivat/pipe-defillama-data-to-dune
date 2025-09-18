@@ -1,8 +1,8 @@
 import polars as pl
 from pathlib import Path
 from datetime import date
-from src.datasources.defillama.yieldpools.tvl_fact import YieldPoolsTVLFact
-from src.datasources.defillama.yieldpools.pools_old import YieldPoolsCurrentState
+from src.datasources.defillama.yieldpools.historical_tvl import YieldPoolsTVLFact
+from src.datasources.defillama.yieldpools.current_state import YieldPoolsCurrentState
 from src.coreutils.logging import setup_logging
 
 # setup logging

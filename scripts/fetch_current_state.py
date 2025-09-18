@@ -6,7 +6,7 @@ This replaces the old metadata approach with enhanced current state data.
 
 import polars as pl
 from datetime import date
-from src.datasources.defillama.yieldpools.pools_old import YieldPoolsCurrentState
+from src.datasources.defillama.yieldpools.current_state import YieldPoolsCurrentState
 from src.datasources.defillama.yieldpools.schemas import METADATA_SCHEMA
 from src.coreutils.logging import setup_logging
 
