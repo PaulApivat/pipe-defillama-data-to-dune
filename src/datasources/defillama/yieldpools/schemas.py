@@ -158,10 +158,10 @@ METADATA_SCHEMA = pl.Schema(
 TVL_SCHEMA = pl.Schema(
     [
         ("timestamp", pl.String()),
-        ("tvlUsd", pl.Float64()),
+        ("tvl_usd", pl.Float64()),
         ("apy", pl.Float64()),
-        ("apyBase", pl.Float64()),
-        ("apyReward", pl.Float64()),
+        ("apy_base", pl.Float64()),
+        ("apy_reward", pl.Float64()),
         ("pool_id", pl.String()),
     ]
 )
