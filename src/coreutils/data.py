@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Optional, Union, Dict, Any
-from src.datasources.defillama.yieldpools.schemas import TVL_SCHEMA
+from src.datasources.defillama.yieldpools.schemas import HISTORICAL_TVL_SCHEMA
 
 import polars as pl
 import json
@@ -166,10 +166,10 @@ class DataConverter:
                         for pool_data in data:
                             if isinstance(pool_data, list):
                                 flattened_data.extend(pool_data)
-                        df = pl.DataFrame(flattened_data, schema=TVL_SCHEMA)
+                        df = pl.DataFrame(flattened_data, schema=HISTORICAL_TVL_SCHEMA)
                     else:
                         # already a flat list of records
-                        df = pl.DataFrame(data, schema=TVL_SCHEMA)
+                        df = pl.DataFrame(data, schema=HISTORICAL_TVL_SCHEMA)
             else:
                 df = pl.DataFrame(data, strict=False)
 

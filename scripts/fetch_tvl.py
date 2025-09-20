@@ -65,5 +65,41 @@ def fetch_tvl_functional():
         raise
 
 
+def fetch_tvl_with_daily_metrics():
+    """Fetch historical TVL data and create daily metrics to be joined with SCD2 dimensions"""
+    logger.info("🔄 Fetching historical TVL data and creating daily metrics...")
+
+    try:
+        # load metadata (current state data)
+        logger.info("Loading metadata from current state...")
+        metadata = YieldPoolsCurrentState.fetch().filter_by_projects(TARGET_PROJECTS)
+
+        # Fetch historical TVL data
+        tvl_data = (
+            YieldPoolsTVLFact.fetch_incremental_tvl(metadata_source=metadata)
+            .validate_schema()
+            .sort_by_timestamp(descending=False)
+        )
+
+        # Load SCD2 dimension
+        scd2_df = pl.read_parquet("output/pool_dim_scd2.parquet")
+
+        # create daily metrics
+        daily_metrics = tvl_data.create_daily_metrics(scd2_df)
+
+        # save daily metrics
+        today = date.today()
+        date_range = (today, today)
+        tvl_data.save_daily_metrics(daily_metrics, date_range)
+
+        logger.info("✅ Daily metrics created successfully")
+        return tvl_data, daily_metrics
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching TVL data and creating daily metrics: {e}")
+        raise
+
+
 if __name__ == "__main__":
-    fetch_tvl_functional()
+    fetch_tvl_with_daily_metrics()
+    # -- previous main function: fetch_tvl_functional()

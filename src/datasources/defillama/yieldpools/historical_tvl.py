@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 import polars as pl
 from src.coreutils.request import new_session, get_data
-from src.datasources.defillama.yieldpools.schemas import TVL_SCHEMA
+from src.datasources.defillama.yieldpools.schemas import HISTORICAL_TVL_SCHEMA
 from typing import Callable, Optional, Union, List, Dict, TYPE_CHECKING
 import logging
 
@@ -50,7 +50,7 @@ class YieldPoolsTVLFact:
         except Exception as e:
             cls.logger.error(f"❌ Error loading TVL data from {filepath}: {e}")
             cls.logger.warning("Continuing with empty data...")
-            return cls(df=pl.DataFrame(schema=TVL_SCHEMA))
+            return cls(df=pl.DataFrame(schema=HISTORICAL_TVL_SCHEMA))
 
     @classmethod
     def fetch_for_pool(cls, pool_id: str) -> "YieldPoolsTVLFact":
@@ -82,7 +82,7 @@ class YieldPoolsTVLFact:
 
         if not all_data:
             cls.logger.error("No TVL data could be fetched for any pools")
-            return cls(df=pl.DataFrame(schema=TVL_SCHEMA))
+            return cls(df=pl.DataFrame(schema=HISTORICAL_TVL_SCHEMA))
 
         combined_df = pl.concat(all_data)
         cls.logger.info(f"Successfully fetched TVL data for {len(all_data)} pools")
@@ -158,7 +158,7 @@ class YieldPoolsTVLFact:
             }
             records.append(row)
 
-        return cls(df=pl.DataFrame(records, schema=TVL_SCHEMA))
+        return cls(df=pl.DataFrame(records, schema=HISTORICAL_TVL_SCHEMA))
 
     def filter_by_date_range(
         self, start_date: str, end_date: str
@@ -172,7 +172,9 @@ class YieldPoolsTVLFact:
         )
         return YieldPoolsTVLFact(df=filtered_df)
 
-    def validate_schema(self, schema: pl.Schema = TVL_SCHEMA) -> "YieldPoolsTVLFact":
+    def validate_schema(
+        self, schema: pl.Schema = HISTORICAL_TVL_SCHEMA
+    ) -> "YieldPoolsTVLFact":
         """Validate and cast DataFrame to specified schema"""
         self.logger.info(f"Validating schema for {self.df.height} records")
         try:
@@ -199,8 +201,8 @@ class YieldPoolsTVLFact:
         return YieldPoolsTVLFact(df=selected_df)
 
     def get_summary_stats(self) -> Dict:
-        """Get summary stats using TVL_SCHEMA"""
-        from .schemas import TVL_SCHEMA
+        """Get summary stats using HISTORICAL_TVL_SCHEMA"""
+        from .schemas import HISTORICAL_TVL_SCHEMA
 
         stats = {}
 
@@ -209,7 +211,7 @@ class YieldPoolsTVLFact:
         stats["unique_pools"] = self.df.select(pl.col("pool_id").n_unique()).item()
 
         # add field specific stats contained in TVL_SCHEMA
-        for field_name, field_type in TVL_SCHEMA.items():
+        for field_name, field_type in HISTORICAL_TVL_SCHEMA.items():
             if field_name in self.df.columns:
                 # for list fields, get count stats
                 if field_type == pl.List(pl.String()):
@@ -259,3 +261,21 @@ class YieldPoolsTVLFact:
         conn = duckdb.connect(":memory:")
         conn.register("tvl_data", self.df)
         return conn.execute(query).pl()
+
+    def create_daily_metrics(self, scd2_df: pl.DataFrame) -> pl.DataFrame:
+        """Create daily metrics with as-of join"""
+        from .scd2_manager import SCD2Manager
+
+        with SCD2Manager() as scd2_manager:
+            # Register both TVL data and SCD2 dimensions
+            scd2_manager.register_dataframes(self.df, scd2_df)
+            return scd2_manager.create_daily_metrics_view_sql(self.df)
+
+    def save_daily_metrics(
+        self, daily_metrics_df: pl.DataFrame, date_range: tuple
+    ) -> None:
+        """Save daily metrics for specific date range"""
+        start_date, end_date = date_range
+        filename = f"output/daily_metrics_{start_date}_{end_date}.parquet"
+        daily_metrics_df.write_parquet(filename)
+        self.logger.info(f"✅ Daily metrics saved to {filename}")
