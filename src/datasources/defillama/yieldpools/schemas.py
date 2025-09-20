@@ -138,7 +138,7 @@ class TVLResponse(BaseModel):
 
 import polars as pl
 
-METADATA_SCHEMA = pl.Schema(
+CURRENT_STATE_SCHEMA = pl.Schema(
     [
         ("pool", pl.String()),
         ("protocol_slug", pl.String()),
@@ -155,7 +155,7 @@ METADATA_SCHEMA = pl.Schema(
     ]
 )
 
-TVL_SCHEMA = pl.Schema(
+HISTORICAL_TVL_SCHEMA = pl.Schema(
     [
         ("timestamp", pl.String()),
         ("tvl_usd", pl.Float64()),
@@ -163,6 +163,50 @@ TVL_SCHEMA = pl.Schema(
         ("apy_base", pl.Float64()),
         ("apy_reward", pl.Float64()),
         ("pool_id", pl.String()),
+    ]
+)
+
+
+# =============================================================================
+# Add SCD2 schemas
+# =============================================================================
+
+# -- Key: (pool_id, valid_from); query filter uses date BETWEEN valid_from AND valid_to-1
+
+POOL_DIM_SCD2_SCHEMA = pl.Schema(
+    [
+        ("pool_id", pl.String()),
+        ("protocol_slug", pl.String()),
+        ("chain", pl.String()),
+        ("symbol", pl.String()),
+        ("underlying_tokens", pl.List(pl.String())),
+        ("reward_tokens", pl.List(pl.String())),
+        ("timestamp", pl.String()),
+        ("tvl_usd", pl.Float64()),
+        ("apy", pl.Float64()),
+        ("apy_base", pl.Float64()),
+        ("apy_reward", pl.Float64()),
+        ("pool_old", pl.String()),
+        ("valid_from", pl.Date()),
+        ("valid_to", pl.Date()),  # -- exclusive end; use 9999-12-31 for “open”
+        ("is_current", pl.Boolean()),
+        ("attrib_hash", pl.String()),  # — hash of dimension attributes to detect change
+        ("is_active", pl.Boolean()),  # — optional if pools can “disappear”
+    ]
+)
+
+
+DAILY_METRICS_SCHEMA = pl.Schema(
+    [
+        ("timestamp", pl.Date()),
+        ("pool_id", pl.String()),
+        ("protocol_slug", pl.String()),
+        ("chain", pl.String()),
+        ("symbol", pl.String()),
+        ("tvl_usd", pl.Float64()),
+        ("apy", pl.Float64()),
+        ("apy_base", pl.Float64()),
+        ("apy_reward", pl.Float64()),
     ]
 )
 
@@ -238,13 +282,13 @@ def validate_tvl_response(data: dict) -> TVLResponse:
 def metadata_to_polars(metadata: MetadataResponse) -> pl.DataFrame:
     """Convert validated metadata to Polars DataFrame"""
     records = [pool.dict() for pool in metadata.pools]
-    return pl.DataFrame(records, schema=METADATA_SCHEMA)
+    return pl.DataFrame(records, schema=CURRENT_STATE_SCHEMA)
 
 
 def tvl_to_polars(tvl: TVLResponse) -> pl.DataFrame:
     """Convert validated TVL data to Polars DataFrame"""
     records = [point.dict() for point in tvl.data]
-    return pl.DataFrame(records, schema=TVL_SCHEMA)
+    return pl.DataFrame(records, schema=HISTORICAL_TVL_SCHEMA)
 
 
 def protocols_to_polars(protocols: List[ProtocolData]) -> pl.DataFrame:

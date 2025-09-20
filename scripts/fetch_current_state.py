@@ -7,7 +7,7 @@ This replaces the old metadata approach with enhanced current state data.
 import polars as pl
 from datetime import date
 from src.datasources.defillama.yieldpools.current_state import YieldPoolsCurrentState
-from src.datasources.defillama.yieldpools.schemas import METADATA_SCHEMA
+from src.datasources.defillama.yieldpools.schemas import CURRENT_STATE_SCHEMA
 from src.coreutils.logging import setup_logging
 
 
@@ -24,8 +24,11 @@ TARGET_PROJECTS = {
 
 
 def fetch_current_state():
-    """Fetch current state data for all pools, filtered by target projects."""
-    logger.info("🔄 Fetching current state data from DeFiLlama PoolsOld API...")
+    """Fetch current state data for all pools, filtered by target projects.
+    Update SCD2 dimensions"""
+    logger.info(
+        "🔄 Fetching current state from DeFiLlama PoolsOld API and updating SCD2 dimensions..."
+    )
 
     try:
         # create instance and apply functional pipeline
@@ -33,9 +36,14 @@ def fetch_current_state():
             YieldPoolsCurrentState.fetch()
             .filter_by_projects(TARGET_PROJECTS)
             .transform_pool_old()
-            .validate_schema(METADATA_SCHEMA)
+            .validate_schema(CURRENT_STATE_SCHEMA)
             .sort_by_tvl(descending=True)
         )
+
+        # Update SCD2 dimensions
+        snap_date = date.today()
+        scd2_df = current_state.update_scd2_dimensions(snap_date)
+        current_state.save_scd2_dimensions(scd2_df)
 
         # Get summary stats
         stats = current_state.get_summary_stats()
@@ -56,17 +64,14 @@ def fetch_current_state():
         logger.info(f"   Average APY Reward: {stats['apy_reward_mean']:.2f}%")
         logger.info(f"   Pool Old: {stats['pool_old_unique']}")
 
-        # Save data
-        today = date.today().strftime("%Y-%m-%d")
-        current_state.to_parquet(f"output/current_state_{today}.parquet")
-        current_state.to_json(f"output/current_state_{today}.json")
-
-        logger.info(f"✅ Data saved to output/current_state_{today}.*")
-
-        return current_state
+        # Return both current_state and scd2_df
+        logger.info("✅ SCD2 dimensions updated successfully")
+        return current_state, scd2_df
 
     except Exception as e:
-        logger.error(f"❌ Error fetching current state data: {e}")
+        logger.error(
+            f"❌ Error fetching current state and updating SCD2 dimensions: {e}"
+        )
         raise
 
 

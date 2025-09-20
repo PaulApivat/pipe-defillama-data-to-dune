@@ -5,7 +5,7 @@ This script uses the DataConverter class from coreutils/data.py to convert tvl_d
 
 from pathlib import Path
 from src.coreutils.data import DataConverter
-from src.datasources.defillama.yieldpools.schemas import TVL_SCHEMA
+from src.datasources.defillama.yieldpools.schemas import HISTORICAL_TVL_SCHEMA
 
 
 def main():
@@ -34,7 +34,7 @@ def main():
         # Convert JSON To Parquet with schema validation
         print(f"\n🔄 Converting to Parquet format...")
         DataConverter.json_to_parquet(
-            json_path=json_path, parquet_path=parquet_path, schema=TVL_SCHEMA
+            json_path=json_path, parquet_path=parquet_path, schema=HISTORICAL_TVL_SCHEMA
         )
 
         # Get file information after conversion
@@ -52,7 +52,7 @@ def main():
         # Validate schema
         print(f"\n Validating schema...")
         schema_valid = DataConverter.validate_parquet_schema(
-            file_path=parquet_path, expected_schema=TVL_SCHEMA
+            file_path=parquet_path, expected_schema=HISTORICAL_TVL_SCHEMA
         )
 
         if schema_valid:

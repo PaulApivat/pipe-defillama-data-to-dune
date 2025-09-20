@@ -68,9 +68,9 @@ class YieldPoolsCurrentState:
             records.append(row)
 
         # Use explicit schema to avoid inference issues
-        from .schemas import METADATA_SCHEMA
+        from .schemas import CURRENT_STATE_SCHEMA
 
-        return cls(df=pl.DataFrame(records, schema=METADATA_SCHEMA))
+        return cls(df=pl.DataFrame(records, schema=CURRENT_STATE_SCHEMA))
 
     def __init__(self, df: pl.DataFrame):
         self.df = df
@@ -141,8 +141,8 @@ class YieldPoolsCurrentState:
         return conn.execute(query).pl()
 
     def get_summary_stats(self) -> dict:
-        """Get summary statistics using METADATA_SCHEMA state"""
-        from .schemas import METADATA_SCHEMA
+        """Get summary statistics using CURRENT_STATE_SCHEMA state"""
+        from .schemas import CURRENT_STATE_SCHEMA
 
         stats = {}
 
@@ -154,7 +154,7 @@ class YieldPoolsCurrentState:
         stats["columns"] = len(self.df.columns)
         stats["memory_usage"] = self.df.estimated_size()
 
-        for field_name, field_type in METADATA_SCHEMA.items():
+        for field_name, field_type in CURRENT_STATE_SCHEMA.items():
             if field_name in self.df.columns:
                 if field_type == pl.List(pl.String()):
                     # For list fields, get count statistics
@@ -179,3 +179,18 @@ class YieldPoolsCurrentState:
                     ).item()
 
         return stats
+
+    def update_scd2_dimensions(self, snap_date: date) -> pl.DataFrame:
+        """Update SCD2 dimension table"""
+        from .scd2_manager import SCD2Manager
+
+        with SCD2Manager() as scd2_manager:
+            # Register the current state data
+            scd2_manager.register_dataframes(self.df, None)
+            # Update SCD2 dimensions
+            return scd2_manager.update_scd2_dimension_sql(snap_date)
+
+    def save_scd2_dimensions(self, scd2_df: pl.DataFrame) -> None:
+        """Save SCD2 dimensions to parquet file"""
+        scd2_df.write_parquet("output/pool_dim_scd2.parquet")
+        self.logger.info("✅ Saved SCD2 dimensions to output/pool_dim_scd2.parquet")

@@ -123,7 +123,7 @@ current_state = (
     YieldPoolsCurrentState.fetch()
     .filter_by_projects(TARGET_PROJECTS)
     .transform_pool_old()
-    .validate_schema(METADATA_SCHEMA)
+    .validate_schema(CURRENT_STATE_SCHEMA)
     .sort_by_tvl(descending=True)
 )
 
@@ -151,7 +151,7 @@ tvl_data = (
 
 ### Data Dictionary
 
-#### TVL Data (Fact Table) - `TVL_SCHEMA`
+#### TVL Data (Fact Table) - `HISTORICAL_TVL_SCHEMA`
 | Column | Type | Description |
 |--------|------|-------------|
 | `timestamp` | STRING | Data point timestamp (ISO 8601) |
@@ -161,7 +161,7 @@ tvl_data = (
 | `apy_reward` | FLOAT64 | Reward APY component |
 | `pool_id` | STRING | Unique pool identifier |
 
-#### Current State (Dimension Table) - `METADATA_SCHEMA`
+#### Current State (Dimension Table) - `CURRENT_STATE_SCHEMA`
 | Column | Type | Description |
 |--------|------|-------------|
 | `pool` | STRING | Pool identifier (join key) |
