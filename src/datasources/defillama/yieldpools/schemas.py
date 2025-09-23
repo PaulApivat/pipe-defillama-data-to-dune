@@ -196,9 +196,10 @@ POOL_DIM_SCD2_SCHEMA = pl.Schema(
 )
 
 
-DAILY_METRICS_SCHEMA = pl.Schema(
+HISTORICAL_FACTS_SCHEMA = pl.Schema(
     [
         ("timestamp", pl.Date()),
+        ("pool_old_clean", pl.String()),
         ("pool_id", pl.String()),
         ("protocol_slug", pl.String()),
         ("chain", pl.String()),
@@ -207,9 +208,13 @@ DAILY_METRICS_SCHEMA = pl.Schema(
         ("apy", pl.Float64()),
         ("apy_base", pl.Float64()),
         ("apy_reward", pl.Float64()),
+        ("valid_from", pl.Date()),
+        ("valid_to", pl.Date()),
+        ("is_current", pl.Boolean()),
+        ("attrib_hash", pl.String()),
+        ("is_active", pl.Boolean()),
     ]
 )
-
 
 # =============================================================================
 # Protocol Schemas (for /protocols endpoint)

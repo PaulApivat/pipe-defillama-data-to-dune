@@ -3,7 +3,10 @@ import time
 from datetime import date, timedelta
 from src.coreutils.dune_uploader import DuneUploader
 from scripts.fetch_current_state import fetch_current_state
-from scripts.fetch_tvl import fetch_tvl_with_daily_metrics
+from scripts.fetch_tvl import (
+    fetch_tvl_with_historical_facts,
+    fetch_tvl_with_incremental_historical_facts,
+)
 from src.coreutils.logging import setup_logging
 
 logger = setup_logging()
@@ -43,30 +46,53 @@ class SCD2Scheduler:
         logger.info("✅ Weekly dimension update completed successfully")
 
     def run_daily_fact_update(self):
-        """Daily: Update facts and daily metrics"""
-        logger.info("🔄 Running daily fact and metrics update...")
+        """Daily: Update historical facts table"""
+        logger.info("🔄 Running daily historical facts update...")
 
         if self.dry_run:
-            logger.info("🔍 DRY RUN: Would fetch TVL data and create daily metrics")
+            logger.info("🔍 DRY RUN: Would fetch TVL data and create historical facts")
             return
 
-        # update facts and daily metrics
-        tvl_data, daily_metrics = fetch_tvl_with_daily_metrics()
+        # Check if this is initial run or incremental
+        today = date.today()
 
-        # Upload daily metrics partition
+        # Simple logic: if historical facts file exists, use incremental; otherwise use full
+        import os
+
+        historical_facts_file = f"output/historical_facts_{today}.parquet"
+        tvl_data_file = f"output/tvl_data_{today}.parquet"
+
+        # Ensure TVL data exists first
+        if not os.path.exists(tvl_data_file):
+            logger.info("🔄 TVL data file not found, creating it first...")
+            from scripts.fetch_tvl import fetch_tvl_functional
+
+            tvl_data = fetch_tvl_functional()
+            logger.info(f"📊 Created TVL data with {tvl_data.df.height} rows")
+        else:
+            logger.info(f"📊 Using existing TVL data file: {tvl_data_file}")
+            import polars as pl
+
+            existing_tvl = pl.read_parquet(tvl_data_file)
+            logger.info(f"📊 Existing TVL data has {existing_tvl.height} rows")
+
+        if os.path.exists(historical_facts_file):
+            logger.info("📈 Using incremental historical facts update...")
+            tvl_data, historical_facts = fetch_tvl_with_incremental_historical_facts()
+        else:
+            logger.info("🆕 Using full historical facts update (initial run)...")
+            tvl_data, historical_facts = fetch_tvl_with_historical_facts()
+
+        # Upload historical facts
         if self.dune_uploader:
             # Create table first (idempotent operation)
-            logger.info("Creating/updating daily metrics table...")
-            self.dune_uploader.create_daily_metrics_table()
+            logger.info("Creating/updating historical facts table...")
+            self.dune_uploader.create_historical_facts_table()
 
-            today = date.today()
-            date_range = (today, today)
+            # Upload historical facts data
+            self.dune_uploader.upload_historical_facts_data(historical_facts)
 
-            # Delete old partition and Upload new one
-            self.dune_uploader.delete_daily_metrics_partition(date_range)
-            self.dune_uploader.upload_daily_metrics_partition(daily_metrics, date_range)
-
-        logger.info("✅ Daily fact and metrics update completed successfully")
+        logger.info("✅ Daily historical facts update completed successfully")
 
     def start(self):
         # Schedule weekly dimension update

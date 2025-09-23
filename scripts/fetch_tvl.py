@@ -1,4 +1,5 @@
 import polars as pl
+import os
 from pathlib import Path
 from datetime import date
 from src.datasources.defillama.yieldpools.historical_tvl import YieldPoolsTVLFact
@@ -34,13 +35,24 @@ def fetch_tvl_functional():
 
         # fetch historical TVL data (incremental if existing data found)
         logger.info("Fetching historical TVL data for all pools in metadata...")
-        tvl_data = (
-            YieldPoolsTVLFact.fetch_incremental_tvl(
-                metadata_source=metadata, existing_tvl_file=existing_tvl_file
+
+        # Check if we should use incremental or full fetch
+        if os.path.exists(existing_tvl_file):
+            logger.info("Using incremental TVL fetch...")
+            tvl_data = (
+                YieldPoolsTVLFact.fetch_incremental_tvl(
+                    metadata_source=metadata, existing_tvl_file=existing_tvl_file
+                )
+                .validate_schema()
+                .sort_by_timestamp(descending=False)
             )
-            .validate_schema()
-            .sort_by_timestamp(descending=False)
-        )
+        else:
+            logger.info("Using full TVL fetch for all pools...")
+            tvl_data = (
+                YieldPoolsTVLFact.fetch_tvl_for_metadata_pools(metadata_source=metadata)
+                .validate_schema()
+                .sort_by_timestamp(descending=False)
+            )
 
         # get summary stats
         stats = tvl_data.get_summary_stats()
@@ -65,41 +77,118 @@ def fetch_tvl_functional():
         raise
 
 
-def fetch_tvl_with_daily_metrics():
-    """Fetch historical TVL data and create daily metrics to be joined with SCD2 dimensions"""
-    logger.info("🔄 Fetching historical TVL data and creating daily metrics...")
+def fetch_tvl_with_historical_facts():
+    """Fetch TVL data and create historical facts to be joined with SCD2 dimensions"""
+    logger.info("🔄 Fetching historical TVL data and historical facts...")
 
     try:
         # load metadata (current state data)
         logger.info("Loading metadata from current state...")
         metadata = YieldPoolsCurrentState.fetch().filter_by_projects(TARGET_PROJECTS)
 
-        # Fetch historical TVL data
-        tvl_data = (
-            YieldPoolsTVLFact.fetch_incremental_tvl(metadata_source=metadata)
-            .validate_schema()
-            .sort_by_timestamp(descending=False)
-        )
+        # get today's date
+        today = date.today().strftime("%Y-%m-%d")
+
+        # check for existing TVL data for incremental update
+        existing_tvl_file = f"output/tvl_data_{today}.parquet"
+
+        # Fetch historical TVL data (incremental if existing data found)
+        logger.info("Fetching historical TVL data for all pools in metadata...")
+
+        # Check if we should use incremental or full fetch
+        if os.path.exists(existing_tvl_file):
+            logger.info("Using incremental TVL fetch...")
+            tvl_data = (
+                YieldPoolsTVLFact.fetch_incremental_tvl(
+                    metadata_source=metadata, existing_tvl_file=existing_tvl_file
+                )
+                .validate_schema()
+                .sort_by_timestamp(descending=False)
+            )
+        else:
+            logger.info("Using full TVL fetch for all pools...")
+            tvl_data = (
+                YieldPoolsTVLFact.fetch_tvl_for_metadata_pools(metadata_source=metadata)
+                .validate_schema()
+                .sort_by_timestamp(descending=False)
+            )
 
         # Load SCD2 dimension
         scd2_df = pl.read_parquet("output/pool_dim_scd2.parquet")
 
-        # create daily metrics
-        daily_metrics = tvl_data.create_daily_metrics(scd2_df)
+        # create historical facts
+        historical_facts = tvl_data.create_historical_facts(scd2_df)
 
-        # save daily metrics
+        # save historical facts
         today = date.today()
-        date_range = (today, today)
-        tvl_data.save_daily_metrics(daily_metrics, date_range)
+        filename = f"output/historical_facts_{today}.parquet"
+        historical_facts.write_parquet(filename)
+        logger.info(f"✅ Historical facts saved to {filename}")
 
-        logger.info("✅ Daily metrics created successfully")
-        return tvl_data, daily_metrics
+        logger.info("✅ Historical facts created successfully")
+        return tvl_data, historical_facts
 
     except Exception as e:
-        logger.error(f"❌ Error fetching TVL data and creating daily metrics: {e}")
+        logger.error(f"❌ Error creating historical facts: {e}")
+        raise
+
+
+def fetch_tvl_with_incremental_historical_facts():
+    """Fetch TVL data and create incremental historical facts for today"""
+    logger.info("🔄 Fetching TVL data and creating incremental historical facts...")
+
+    try:
+        # Load metadata (current state data)
+        logger.info("Loading metadata from current state...")
+        metadata = YieldPoolsCurrentState.fetch().filter_by_projects(TARGET_PROJECTS)
+
+        # get today's date
+        today = date.today().strftime("%Y-%m-%d")
+
+        # check for existing TVL data for incremental update
+        existing_tvl_file = f"output/tvl_data_{today}.parquet"
+
+        # Fetch historical TVL data (incremental if existing data found)
+        logger.info("Fetching historical TVL data for all pools in metadata...")
+
+        # Check if we should use incremental or full fetch
+        if os.path.exists(existing_tvl_file):
+            logger.info("Using incremental TVL fetch...")
+            tvl_data = (
+                YieldPoolsTVLFact.fetch_incremental_tvl(
+                    metadata_source=metadata, existing_tvl_file=existing_tvl_file
+                )
+                .validate_schema()
+                .sort_by_timestamp(descending=False)
+            )
+        else:
+            logger.info("Using full TVL fetch for all pools...")
+            tvl_data = (
+                YieldPoolsTVLFact.fetch_tvl_for_metadata_pools(metadata_source=metadata)
+                .validate_schema()
+                .sort_by_timestamp(descending=False)
+            )
+
+        # Load SCD2 dimensions
+        scd2_df = pl.read_parquet("output/pool_dim_scd2.parquet")
+
+        # Create incremental historical facts for today
+        today = date.today()
+        historical_facts = tvl_data.create_incremental_historical_facts(scd2_df, today)
+
+        # Save incremental historical facts
+        filename = f"output/historical_facts_{today}.parquet"
+        historical_facts.write_parquet(filename)
+        logger.info(f"✅ Incremental historical facts saved to {filename}")
+
+        logger.info("✅ Incremental historical facts created successfully")
+        return tvl_data, historical_facts
+
+    except Exception as e:
+        logger.error(f"❌ Error creating incremental historical facts: {e}")
         raise
 
 
 if __name__ == "__main__":
-    fetch_tvl_with_daily_metrics()
+    fetch_tvl_with_historical_facts()
     # -- previous main function: fetch_tvl_functional()

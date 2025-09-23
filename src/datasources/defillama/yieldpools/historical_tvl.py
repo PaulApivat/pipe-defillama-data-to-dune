@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 import polars as pl
+import os
 from src.coreutils.request import new_session, get_data
 from src.datasources.defillama.yieldpools.schemas import HISTORICAL_TVL_SCHEMA
 from typing import Callable, Optional, Union, List, Dict, TYPE_CHECKING
@@ -68,11 +69,17 @@ class YieldPoolsTVLFact:
         """Fetch historical TVL data for multiple pools"""
         all_data = []
         failed_pools = []
+        total_rows = 0
 
         for i, pool_id in enumerate(pool_ids, start=1):
             try:
                 cls.logger.info(f"Fetching TVL for pool {i}/{len(pool_ids)}: {pool_id}")
                 pool_data = cls.fetch_for_pool(pool_id)
+                pool_rows = pool_data.df.height
+                total_rows += pool_rows
+                cls.logger.info(
+                    f"  → Got {pool_rows} historical data points for {pool_id}"
+                )
                 all_data.append(pool_data.df)
             except Exception as e:
                 cls.logger.error(f"❌ Error fetching data for pool {pool_id}: {e}")
@@ -86,6 +93,7 @@ class YieldPoolsTVLFact:
 
         combined_df = pl.concat(all_data)
         cls.logger.info(f"Successfully fetched TVL data for {len(all_data)} pools")
+        cls.logger.info(f"Total historical data points: {total_rows}")
         if failed_pools:
             cls.logger.warning(
                 f"Failed to fetch TVL for {len(failed_pools)} pools: {failed_pools}"
@@ -106,10 +114,10 @@ class YieldPoolsTVLFact:
         cls, metadata_source: "YieldPoolsCurrentState", existing_tvl_file: str = None
     ) -> "YieldPoolsTVLFact":
         """Fetch incremental TVL data (new pools only)"""
-        # load existing TVL data if available
-        existing_tvl = (
-            cls.load_existing_tvl(existing_tvl_file) if existing_tvl_file else None
-        )
+        # load existing TVL data if available and file exists
+        existing_tvl = None
+        if existing_tvl_file and os.path.exists(existing_tvl_file):
+            existing_tvl = cls.load_existing_tvl(existing_tvl_file)
 
         # get all pool IDs from metadata
         all_pool_ids = cls.load_metadata(metadata_source)
@@ -262,20 +270,50 @@ class YieldPoolsTVLFact:
         conn.register("tvl_data", self.df)
         return conn.execute(query).pl()
 
-    def create_daily_metrics(self, scd2_df: pl.DataFrame) -> pl.DataFrame:
-        """Create daily metrics with as-of join"""
+    def create_historical_facts(self, scd2_df: pl.DataFrame) -> pl.DataFrame:
+        """Create historical facts with as-of join and SCD2 fields"""
         from .scd2_manager import SCD2Manager
 
         with SCD2Manager() as scd2_manager:
             # Register both TVL data and SCD2 dimensions
             scd2_manager.register_dataframes(self.df, scd2_df)
-            return scd2_manager.create_daily_metrics_view_sql(self.df)
+            historical_facts = scd2_manager.create_historical_facts_sql(
+                self.df, scd2_df
+            )
 
-    def save_daily_metrics(
-        self, daily_metrics_df: pl.DataFrame, date_range: tuple
+            # Save historical facts
+            today = date.today()
+            date_range = (today, today)
+            self.save_historical_facts(historical_facts, date_range)
+
+            return historical_facts
+
+    def save_historical_facts(
+        self, historical_facts_df: pl.DataFrame, date_range: tuple
     ) -> None:
-        """Save daily metrics for specific date range"""
+        """Save historical facts for specific date range"""
         start_date, end_date = date_range
-        filename = f"output/daily_metrics_{start_date}_{end_date}.parquet"
-        daily_metrics_df.write_parquet(filename)
-        self.logger.info(f"✅ Daily metrics saved to {filename}")
+        filename = f"output/historical_facts_{start_date}_{end_date}.parquet"
+        historical_facts_df.write_parquet(filename)
+        self.logger.info(f"✅ Historical facts saved to {filename}")
+
+    def create_incremental_historical_facts(
+        self, scd2_df: pl.DataFrame, target_date: date
+    ) -> pl.DataFrame:
+        """Create incremental historical facts (full historical dataset)"""
+        from .scd2_manager import SCD2Manager
+
+        with SCD2Manager() as scd2_manager:
+            # Register both TVL data and SCD2 dimensions
+            scd2_manager.register_dataframes(self.df, scd2_df)
+            # Create full historical facts (not just today's slice)
+            historical_facts = scd2_manager.create_historical_facts_sql(
+                self.df, scd2_df
+            )
+
+        # Save historical facts
+        today = date.today()
+        date_range = (today, today)
+        self.save_historical_facts(historical_facts, date_range)
+
+        return historical_facts
