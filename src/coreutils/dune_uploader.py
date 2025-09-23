@@ -18,6 +18,8 @@ class DateTimeEncoder(json.JSONEncoder):
 from src.datasources.defillama.yieldpools.schemas import (
     CURRENT_STATE_SCHEMA,
     HISTORICAL_TVL_SCHEMA,
+    POOL_DIM_SCD2_SCHEMA,
+    HISTORICAL_FACTS_SCHEMA,
 )
 import polars as pl
 
@@ -152,15 +154,15 @@ class DuneUploader:
             description="Historical TVL and APY data - updated daily",
         )
 
-    def create_daily_metrics_table(self) -> Dict[str, Any]:
-        """Create the daily metrics table (defillama_daily_metrics) using DAILY_METRICS_SCHEMA"""
-        from src.datasources.defillama.yieldpools.schemas import DAILY_METRICS_SCHEMA
+    def create_historical_facts_table(self) -> Dict[str, Any]:
+        """Create the historical facts table (defillama_historical_facts) using HISTORICAL_FACTS_SCHEMA"""
+        from src.datasources.defillama.yieldpools.schemas import HISTORICAL_FACTS_SCHEMA
 
-        schema = self._polars_to_dune_schema(DAILY_METRICS_SCHEMA)
+        schema = self._polars_to_dune_schema(HISTORICAL_FACTS_SCHEMA)
         return self.create_table(
-            table_name="defillama_daily_metrics",
+            table_name="defillama_historical_facts",
             schema=schema,
-            description="Denormalized daily metrics for DeFiLlama yield pools - updated daily",
+            description="Historical facts table with SCD2 dimensions for DeFiLlama yield pools - updated daily",
         )
 
     def upload_data(
@@ -171,6 +173,10 @@ class DuneUploader:
     ) -> Dict[str, Any]:
         """Upload data to Dune table"""
         self.logger.info(f"Uploading {len(data)} rows to table: {table_name}")
+
+        # Clear table first to ensure full refresh
+        self.logger.info(f"Clearing table {table_name} before upload...")
+        self.clear_table(table_name)
 
         url = f"{self.base_url}/table/{self.namespace}/{table_name}/insert"
 
@@ -235,6 +241,21 @@ class DuneUploader:
 
         return self.upload_data(table_name="defillama_tvl_data", data=prepared_data)
 
+    def upload_historical_facts_data(
+        self, historical_facts_df: pl.DataFrame
+    ) -> Dict[str, Any]:
+        """Upload historical facts data to Dune"""
+        self.logger.info("Uploading historical facts data (defillama_historical_facts)")
+        data = (
+            historical_facts_df.to_dicts()
+            if hasattr(historical_facts_df, "to_dicts")
+            else historical_facts_df
+        )
+        prepared_data = self._prepare_data_for_dune(data)
+        return self.upload_data(
+            table_name="defillama_historical_facts", data=prepared_data
+        )
+
     def clear_table(self, table_name: str) -> Dict[str, Any]:
         """Clear all data from a table"""
         self.logger.info(f"Clearing table: {table_name}")
@@ -284,7 +305,7 @@ class DuneUploader:
         data = daily_metrics_df.to_dicts()
 
         # upload to Dune
-        return self.upload_data(table_name="defillama_daily_metrics", data=data)
+        return self.upload_data(table_name="defillama_historical_facts", data=data)
 
     def delete_daily_metrics_partition(self, date_range: tuple) -> Dict[str, Any]:
         """Delete daily metrics partition from Dune"""
@@ -296,4 +317,4 @@ class DuneUploader:
         # This would require a DELETE query in Dune
         # for now, we'll clear and re-upload
 
-        return self.clear_table(table_name="defillama_daily_metrics")
+        return self.clear_table(table_name="defillama_historical_facts")
