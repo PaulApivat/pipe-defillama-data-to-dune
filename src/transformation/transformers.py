@@ -1,62 +1,50 @@
 """
-Data Transformers - Transform Layer
+Data Transformers - Simplified Transform Layer
 
-Pure functions for data transformations including SCD2 logic.
-All functions are deterministic and unit testable.
-No I/O operations, just data manipulation.
+Pure functions for data transformations without SCD2 complexity.
+Since DeFiLlama dimensions are not slowly changing, we use simple schemas.
 """
 
 import polars as pl
-import hashlib
 import duckdb
 from datetime import date
 from typing import List, Dict, Any, Optional
 from .schemas import (
-    CURRENT_STATE_SCHEMA,
-    HISTORICAL_TVL_SCHEMA,
-    POOL_DIM_SCD2_SCHEMA,
+    POOL_DIM_SCHEMA,
     HISTORICAL_FACTS_SCHEMA,
-)
-from .validators import (
-    validate_current_state_schema,
-    validate_historical_tvl_schema,
-    validate_scd2_schema,
-    validate_historical_facts_schema,
 )
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-def transform_raw_pools_to_current_state(raw_df: pl.DataFrame) -> pl.DataFrame:
+def create_pool_dimensions(raw_pools_df: pl.DataFrame) -> pl.DataFrame:
     """
-    Transform raw pools data to current state format
+    Create simple pool dimensions from raw pools data
 
     Args:
-        raw_df: Raw pools data from API
+        raw_pools_df: Raw pools data from API
 
     Returns:
-        pl.DataFrame: Transformed current state data
+        pl.DataFrame: Pool dimensions data
     """
-    logger.info("Transforming raw pools data to current state format")
+    logger.info("Creating pool dimensions from raw pools data")
 
     try:
         # Clean and standardize the data
-        transformed_df = (
-            raw_df.with_columns(
+        dimensions_df = (
+            raw_pools_df.with_columns(
                 [
-                    # Convert Int64 to Float64 for consistency
-                    pl.col("tvl_usd").cast(pl.Float64),
-                    # Handle pool_old field (convert from Float64 to String)
-                    pl.col("pool_old").cast(pl.String),
-                    # Ensure timestamp is properly formatted
-                    pl.col("timestamp").cast(pl.String),
+                    # Convert pool to pool_id for consistency
+                    pl.col("pool").alias("pool_id"),
+                    # Ensure pool_old is string
+                    pl.col("pool_old").cast(pl.String()),
                 ]
             )
-            # Select only the fields we need for current state
+            # Select all fields to match POOL_DIM_SCHEMA (same as RAW_POOLS_SCHEMA)
             .select(
                 [
-                    "pool",
+                    "pool_id",
                     "protocol_slug",
                     "chain",
                     "symbol",
@@ -73,207 +61,36 @@ def transform_raw_pools_to_current_state(raw_df: pl.DataFrame) -> pl.DataFrame:
         )
 
         # Validate schema
-        if transformed_df.schema != CURRENT_STATE_SCHEMA:
+        if dimensions_df.schema != POOL_DIM_SCHEMA:
             logger.warning(
-                f"Schema mismatch: expected {CURRENT_STATE_SCHEMA}, got {transformed_df.schema}"
+                f"Schema mismatch: expected {POOL_DIM_SCHEMA}, got {dimensions_df.schema}"
             )
 
-        logger.info(f"Transformed {transformed_df.height} current state records")
-        return transformed_df
+        logger.info(f"Created {dimensions_df.height} pool dimension records")
+        return dimensions_df
 
     except Exception as e:
-        logger.error(f"❌ Error transforming raw pools data: {e}")
-        raise
-
-
-def transform_raw_tvl_to_historical_tvl(raw_df: pl.DataFrame) -> pl.DataFrame:
-    """
-    Transform raw TVL data to historical TVL format
-
-    Args:
-        raw_df: Raw TVL data from API
-
-    Returns:
-        pl.DataFrame: Transformed historical TVL data
-    """
-    logger.info("Transforming raw TVL data to historical TVL format")
-
-    try:
-        # Clean and standardize the data
-        transformed_df = (
-            raw_df.with_columns(
-                [
-                    # Convert Int64 to Float64 for consistency
-                    pl.col("tvl_usd").cast(pl.Float64),
-                    # Ensure timestamp is properly formatted
-                    pl.col("timestamp").cast(pl.String),
-                ]
-            )
-            # Select only the fields we need for historical TVL
-            .select(
-                ["timestamp", "tvl_usd", "apy", "apy_base", "apy_reward", "pool_id"]
-            )
-        )
-
-        # Validate schema
-        if transformed_df.schema != HISTORICAL_TVL_SCHEMA:
-            logger.warning(
-                f"Schema mismatch: expected {HISTORICAL_TVL_SCHEMA}, got {transformed_df.schema}"
-            )
-
-        logger.info(f"Transformed {transformed_df.height} historical TVL records")
-        return transformed_df
-
-    except Exception as e:
-        logger.error(f"❌ Error transforming raw TVL data: {e}")
-        raise
-
-
-def create_scd2_dimensions(
-    current_state_df: pl.DataFrame,
-    snap_date: date,
-    existing_scd2_df: Optional[pl.DataFrame] = None,
-) -> pl.DataFrame:
-    """
-    Create SCD2 dimensions using SQL approach
-
-    Args:
-        current_state_df: Current state DataFrame
-        snap_date: Snapshot date for SCD2
-        existing_scd2_df: Existing SCD2 data (optional)
-
-    Returns:
-        pl.DataFrame: SCD2 dimensions with historical tracking
-    """
-    logger.info(f"Creating SCD2 dimensions for snapshot date: {snap_date}")
-
-    try:
-        # Create DuckDB connection
-        conn = duckdb.connect()
-
-        # Register DataFrames
-        conn.register("current_state", current_state_df)
-
-        if existing_scd2_df is not None:
-            conn.register("existing_scd2", existing_scd2_df)
-        else:
-            # Create empty SCD2 table if none exists
-            empty_scd2 = pl.DataFrame(
-                {
-                    "pool_id": [],
-                    "protocol_slug": [],
-                    "chain": [],
-                    "symbol": [],
-                    "underlying_tokens": [],
-                    "reward_tokens": [],
-                    "timestamp": [],
-                    "tvl_usd": [],
-                    "apy": [],
-                    "apy_base": [],
-                    "apy_reward": [],
-                    "pool_old": [],
-                    "valid_from": [],
-                    "valid_to": [],
-                    "is_current": [],
-                    "attrib_hash": [],
-                    "is_active": [],
-                }
-            )
-            conn.register("existing_scd2", empty_scd2)
-
-        # SQL for SCD2 update (from scd2_manager.py)
-        sql = f"""
-        WITH new_dims AS (
-            SELECT
-                pool as pool_id 
-                , protocol_slug 
-                , chain 
-                , symbol 
-                , underlying_tokens 
-                , reward_tokens
-                , timestamp
-                , tvl_usd
-                , apy 
-                , apy_base
-                , apy_reward
-                , pool_old 
-                , '2022-01-01'::DATE as valid_from 
-                , '9999-12-31'::DATE as valid_to 
-                , true as is_current 
-                , md5(protocol_slug || '|' || chain || '|' || symbol || '|' || 
-                    array_to_string(underlying_tokens, '|') || '|' || 
-                    array_to_string(reward_tokens, '|') || '|' || 
-                    coalesce(tvl_usd::text, '') || '|' || 
-                    coalesce(apy::text, '') || '|' || 
-                    coalesce(apy_base::text, '') || '|' || 
-                    coalesce(apy_reward::text, '') || '|' || 
-                    coalesce(pool_old, '')
-                ) as attrib_hash
-                , true as is_active
-            FROM current_state
-        ),
-
-        changed_records AS (
-            SELECT n.pool_id
-            FROM new_dims n 
-            JOIN existing_scd2 e ON n.pool_id = e.pool_id AND e.is_current = true
-            WHERE n.attrib_hash != e.attrib_hash
-        ),
-
-        closed_existing AS (
-            SELECT 
-                pool_id, protocol_slug, chain, symbol, underlying_tokens, 
-                reward_tokens, timestamp, tvl_usd, apy, apy_base, apy_reward, 
-                pool_old, valid_from,
-                CASE 
-                    WHEN pool_id IN (SELECT pool_id FROM changed_records)
-                    THEN '{snap_date}'::DATE 
-                    ELSE valid_to 
-                END as valid_to,
-                CASE
-                    WHEN pool_id IN (SELECT pool_id FROM changed_records) 
-                    THEN false 
-                    ELSE is_current 
-                END as is_current,
-                attrib_hash, 
-                is_active
-            FROM existing_scd2 
-        )
-        SELECT * FROM closed_existing
-        UNION ALL
-        SELECT * FROM new_dims 
-        ORDER BY pool_id, valid_from 
-        """
-
-        # Execute SQL and get result
-        result_df = conn.execute(sql).pl()
-
-        # Close connection
-        conn.close()
-
-        logger.info(f"Created {result_df.height} SCD2 dimension records")
-        return result_df
-
-    except Exception as e:
-        logger.error(f"❌ Error creating SCD2 dimensions: {e}")
+        logger.error(f"❌ Error creating pool dimensions: {e}")
         raise
 
 
 def create_historical_facts(
-    tvl_df: pl.DataFrame, scd2_df: pl.DataFrame, target_date: Optional[date] = None
+    tvl_df: pl.DataFrame,
+    dimensions_df: pl.DataFrame,
+    target_date: Optional[date] = None,
 ) -> pl.DataFrame:
     """
-    Create historical facts using SQL as-of join approach
+    Create historical facts by joining TVL data with dimensions
 
     Args:
         tvl_df: Historical TVL DataFrame
-        scd2_df: SCD2 dimensions DataFrame
+        dimensions_df: Pool dimensions DataFrame
         target_date: Optional target date for filtering
 
     Returns:
         pl.DataFrame: Historical facts with denormalized data
     """
-    logger.info("Creating historical facts with as-of join")
+    logger.info("Creating historical facts with simple join")
 
     try:
         # Create DuckDB connection
@@ -281,14 +98,14 @@ def create_historical_facts(
 
         # Register DataFrames
         conn.register("tvl_data", tvl_df)
-        conn.register("existing_scd2", scd2_df)
+        conn.register("pool_dimensions", dimensions_df)
 
         # Build date filter if target_date provided
         date_filter = ""
         if target_date:
             date_filter = f"WHERE timestamp::DATE = '{target_date}'"
 
-        # SQL for as-of join (from scd2_manager.py)
+        # SQL for simple join
         sql = f"""
             WITH tvl_with_date AS (
                 SELECT
@@ -312,17 +129,8 @@ def create_historical_facts(
                 , t.apy 
                 , t.apy_base
                 , t.apy_reward
-                , d.valid_from
-                , d.valid_to
-                , d.is_current
-                , d.attrib_hash
-                , d.is_active
             FROM tvl_with_date t
-            JOIN existing_scd2 d ON (
-                t.pool_id = d.pool_id AND 
-                t.date >= d.valid_from AND 
-                t.date < d.valid_to
-            )
+            JOIN pool_dimensions d ON t.pool_id = d.pool_id
             ORDER BY t.date, t.pool_id
         """
 
@@ -331,88 +139,18 @@ def create_historical_facts(
 
         # Close connection
         conn.close()
+
+        # Validate schema
+        if result_df.schema != HISTORICAL_FACTS_SCHEMA:
+            logger.warning(
+                f"Schema mismatch: expected {HISTORICAL_FACTS_SCHEMA}, got {result_df.schema}"
+            )
 
         logger.info(f"Created {result_df.height} historical facts records")
         return result_df
 
     except Exception as e:
         logger.error(f"❌ Error creating historical facts: {e}")
-        raise
-
-
-def upsert_historical_facts_for_date(
-    tvl_df: pl.DataFrame, scd2_df: pl.DataFrame, target_date: date
-) -> pl.DataFrame:
-    """
-    Create incremental historical facts for a specific date
-
-    Args:
-        tvl_df: Historical TVL DataFrame
-        scd2_df: SCD2 dimensions DataFrame
-        target_date: Target date for incremental update
-
-    Returns:
-        pl.DataFrame: Historical facts for the target date
-    """
-    logger.info(f"Creating incremental historical facts for date: {target_date}")
-
-    try:
-        # Create DuckDB connection
-        conn = duckdb.connect()
-
-        # Register DataFrames
-        conn.register("tvl_data", tvl_df)
-        conn.register("existing_scd2", scd2_df)
-
-        # SQL for incremental historical facts
-        sql = f"""
-            WITH tvl_with_date AS (
-                SELECT
-                    pool_id
-                    , tvl_usd 
-                    , apy
-                    , apy_base
-                    , apy_reward
-                    , timestamp::DATE as date
-                FROM tvl_data
-                WHERE timestamp::DATE = '{target_date}'
-            )
-            SELECT
-                t.date as timestamp 
-                , SPLIT_PART(d.pool_old, '-', 1) as pool_old_clean
-                , t.pool_id 
-                , d.protocol_slug 
-                , d.chain
-                , d.symbol
-                , t.tvl_usd
-                , t.apy 
-                , t.apy_base
-                , t.apy_reward
-                , d.valid_from
-                , d.valid_to
-                , d.is_current
-                , d.attrib_hash
-                , d.is_active
-            FROM tvl_with_date t
-            JOIN existing_scd2 d ON (
-                t.pool_id = d.pool_id AND 
-                t.date >= d.valid_from AND 
-                t.date < d.valid_to
-            )
-            ORDER BY t.date, t.pool_id
-        """
-
-        # Execute SQL and get result
-        result_df = conn.execute(sql).pl()
-
-        # Close connection
-        conn.close()
-
-        logger.info(f"Created {result_df.height} incremental historical facts records")
-        return result_df
-
-    except Exception as e:
-        logger.error(f"❌ Error creating incremental historical facts: {e}")
         raise
 
 
@@ -423,7 +161,7 @@ def filter_pools_by_projects(
     Filter pools by target projects
 
     Args:
-        df: Current state DataFrame
+        df: Pools DataFrame
         target_projects: Set of project slugs to include
 
     Returns:
@@ -488,39 +226,31 @@ def get_summary_stats(df: pl.DataFrame, data_type: str) -> Dict[str, Any]:
     """
     logger.info(f"Generating summary stats for {data_type}")
 
-    if data_type == "current_state":
+    if data_type == "pool_dimensions":
         stats = {
             "total_pools": df.height,
-            "protocol_slug_unique": df.select("protocol_slug").n_unique().item(),
-            "chain_unique": df.select("chain").n_unique().item(),
-            "symbol_unique": df.select("symbol").n_unique().item(),
+            "protocol_slug_unique": df.select("protocol_slug").n_unique(),
+            "chain_unique": df.select("chain").n_unique(),
+            "symbol_unique": df.select("symbol").n_unique(),
             "underlying_tokens_avg_count": df.select("underlying_tokens")
             .with_columns(pl.col("underlying_tokens").list.len())
             .mean()
-            .item(),
-            "underlying_tokens_max_count": df.select("underlying_tokens")
-            .with_columns(pl.col("underlying_tokens").list.len())
-            .max()
             .item(),
             "reward_tokens_avg_count": df.select("reward_tokens")
             .with_columns(pl.col("reward_tokens").list.len())
             .mean()
             .item(),
-            "reward_tokens_max_count": df.select("reward_tokens")
-            .with_columns(pl.col("reward_tokens").list.len())
-            .max()
-            .item(),
-            "timestamp_unique": df.select("timestamp").n_unique().item(),
+            "timestamp_unique": df.select("timestamp").n_unique(),
             "tvl_usd_sum": df.select("tvl_usd").sum().item(),
             "apy_mean": df.select("apy").mean().item(),
             "apy_base_mean": df.select("apy_base").mean().item(),
             "apy_reward_mean": df.select("apy_reward").mean().item(),
-            "pool_old_unique": df.select("pool_old").n_unique().item(),
+            "pool_old_unique": df.select("pool_old").n_unique(),
         }
-    elif data_type == "historical_tvl":
+    elif data_type == "historical_facts":
         stats = {
             "total_records": df.height,
-            "unique_pools": df.select("pool_id").n_unique().item(),
+            "unique_pools": df.select("pool_id").n_unique(),
             "date_range": f"{df.select('timestamp').min().item()} to {df.select('timestamp').max().item()}",
             "tvl_usd_sum": df.select("tvl_usd").sum().item(),
             "apy_mean": df.select("apy").mean().item(),
@@ -535,7 +265,7 @@ def get_summary_stats(df: pl.DataFrame, data_type: str) -> Dict[str, Any]:
 
 
 def save_transformed_data(
-    scd2_df: pl.DataFrame,
+    dimensions_df: pl.DataFrame,
     historical_facts_df: pl.DataFrame,
     today: str,
 ) -> None:
@@ -543,19 +273,19 @@ def save_transformed_data(
     Save transformed data to output directory
 
     Args:
-        scd2_df: SCD2 dimensions data
+        dimensions_df: Pool dimensions data
         historical_facts_df: Historical facts data
         today: Date string for file naming
     """
     logger.info("Saving transformed data to output directory")
 
     try:
-        # Save SCD2 dimensions
-        scd2_file = "output/pool_dim_scd2.parquet"
-        scd2_df.write_parquet(scd2_file)
-        logger.info(f"✅ Saved SCD2 dimensions to {scd2_file}")
+        # Save pool dimensions
+        dimensions_file = "output/pool_dimensions.parquet"
+        dimensions_df.write_parquet(dimensions_file)
+        logger.info(f"✅ Saved pool dimensions to {dimensions_file}")
 
-        # Save historical facts (the joined data)
+        # Save historical facts
         historical_facts_file = f"output/historical_facts_{today}.parquet"
         historical_facts_df.write_parquet(historical_facts_file)
         logger.info(f"✅ Saved historical facts to {historical_facts_file}")
@@ -575,14 +305,14 @@ def main():
     import glob
     import os
 
-    logger.info("🚀 Starting Transform Layer Pipeline")
+    logger.info("🚀 Starting Simplified Transform Layer Pipeline")
 
     try:
         # Get today's date
         today = date.today().strftime("%Y-%m-%d")
 
         # Load extracted data
-        logger.info("�� Loading extracted data...")
+        logger.info("📁 Loading extracted data...")
 
         # Find the most recent raw_pools parquet file
         raw_pools_files = glob.glob("output/raw_pools_*.parquet")
@@ -611,12 +341,12 @@ def main():
         logger.info(f"Loaded {raw_pools_df.height} raw pool records")
         logger.info(f"Loaded {raw_tvl_df.height} raw TVL records")
 
-        # Step 1: Transform raw pools to current state
-        logger.info("�� Step 1: Transforming raw pools to current state...")
-        current_state_df = transform_raw_pools_to_current_state(raw_pools_df)
+        # Step 1: Create pool dimensions
+        logger.info("🔄 Step 1: Creating pool dimensions...")
+        dimensions_df = create_pool_dimensions(raw_pools_df)
 
         # Step 2: Filter by target projects
-        logger.info("�� Step 2: Filtering by target projects...")
+        logger.info("🔄 Step 2: Filtering by target projects...")
         target_projects = {
             "curve-dex",
             "pancakeswap-amm",
@@ -627,57 +357,39 @@ def main():
             "uniswap-v3",
             "fluid-dex",
         }
-        filtered_pools_df = filter_pools_by_projects(current_state_df, target_projects)
-
-        # Step 3: Transform raw TVL to historical TVL
-        logger.info("🔄 Step 3: Transforming raw TVL to historical TVL...")
-        historical_tvl_df = transform_raw_tvl_to_historical_tvl(raw_tvl_df)
-
-        # Step 4: Create SCD2 dimensions
-        logger.info("🔄 Step 4: Creating SCD2 dimensions...")
-        snap_date = date.today()
-        scd2_df = create_scd2_dimensions(filtered_pools_df, snap_date)
-
-        # Step 5: Create historical facts (join TVL + SCD2)
-        logger.info("🔄 Step 5: Creating historical facts...")
-        historical_facts_df = create_historical_facts(historical_tvl_df, scd2_df)
-
-        # Step 6: Save all transformed data
-        logger.info("🔄 Step 6: Saving transformed data...")
-        save_transformed_data(
-            filtered_pools_df,  # Use filtered pools as current state
-            historical_tvl_df,
-            scd2_df,
-            historical_facts_df,
-            today,
+        filtered_dimensions_df = filter_pools_by_projects(
+            dimensions_df, target_projects
         )
 
-        # Step 7: Generate summary statistics
-        logger.info("🔄 Step 7: Generating summary statistics...")
+        # Step 3: Create historical facts (join TVL + dimensions)
+        logger.info("🔄 Step 3: Creating historical facts...")
+        historical_facts_df = create_historical_facts(
+            raw_tvl_df, filtered_dimensions_df
+        )
 
-        # Current state stats
-        current_state_stats = get_summary_stats(filtered_pools_df, "current_state")
+        # Step 4: Save all transformed data
+        logger.info("🔄 Step 4: Saving transformed data...")
+        save_transformed_data(filtered_dimensions_df, historical_facts_df, today)
+
+        # Step 5: Generate summary statistics
+        logger.info("🔄 Step 5: Generating summary statistics...")
+
+        # Dimensions stats
+        dimensions_stats = get_summary_stats(filtered_dimensions_df, "pool_dimensions")
         logger.info(
-            f"Current State Stats: {current_state_stats['total_pools']} pools, "
-            f"{current_state_stats['protocol_slug_unique']} protocols, "
-            f"${current_state_stats['tvl_usd_sum']:,.0f} total TVL"
+            f"Pool Dimensions Stats: {dimensions_stats['total_pools']} pools, "
+            f"{dimensions_stats['protocol_slug_unique']} protocols"
         )
-
-        # Historical TVL stats
-        tvl_stats = get_summary_stats(historical_tvl_df, "historical_tvl")
-        logger.info(
-            f"Historical TVL Stats: {tvl_stats['total_records']} records, "
-            f"{tvl_stats['unique_pools']} unique pools, "
-            f"Date range: {tvl_stats['date_range']}"
-        )
-
-        # SCD2 stats
-        logger.info(f"SCD2 Dimensions: {scd2_df.height} records")
 
         # Historical facts stats
-        logger.info(f"Historical Facts: {historical_facts_df.height} records")
+        facts_stats = get_summary_stats(historical_facts_df, "historical_facts")
+        logger.info(
+            f"Historical Facts Stats: {facts_stats['total_records']} records, "
+            f"{facts_stats['unique_pools']} unique pools, "
+            f"Date range: {facts_stats['date_range']}"
+        )
 
-        logger.info("�� Transform Layer Pipeline completed successfully!")
+        logger.info("🎉 Simplified Transform Layer Pipeline completed successfully!")
 
     except Exception as e:
         logger.error(f"❌ Transform Layer Pipeline failed: {e}")

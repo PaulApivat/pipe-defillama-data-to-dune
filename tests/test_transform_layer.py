@@ -1,6 +1,6 @@
 """
-Test Transform Layer - Verify data transformation functions work correctly
-Uses data saved by the Extract layer, then tests transformations
+Test Simplified Transform Layer - Verify data transformation functions work correctly
+Uses data saved by the Extract layer, then tests simplified transformations
 """
 
 import sys
@@ -12,11 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import polars as pl
 from src.transformation.transformers import (
-    transform_raw_pools_to_current_state,
-    transform_raw_tvl_to_historical_tvl,
-    create_scd2_dimensions,
+    create_pool_dimensions,
     create_historical_facts,
-    upsert_historical_facts_for_date,
     filter_pools_by_projects,
     sort_by_tvl,
     sort_by_timestamp,
@@ -41,7 +38,7 @@ def load_extracted_data():
         )
 
     latest_raw_pools = max(raw_pools_files, key=os.path.getctime)
-    print(f"�� Loading raw pools from: {latest_raw_pools}")
+    print(f"📁 Loading raw pools from: {latest_raw_pools}")
 
     # Find the most recent raw_tvl parquet file
     raw_tvl_files = glob.glob("output/raw_tvl_*.parquet")
@@ -51,7 +48,7 @@ def load_extracted_data():
         )
 
     latest_raw_tvl = max(raw_tvl_files, key=os.path.getctime)
-    print(f"�� Loading raw TVL from: {latest_raw_tvl}")
+    print(f"📁 Loading raw TVL from: {latest_raw_tvl}")
 
     # Load the data
     raw_pools_df = pl.read_parquet(latest_raw_pools)
@@ -64,19 +61,19 @@ def load_extracted_data():
 
 
 def test_transform_layer():
-    """Test that Transform layer functions work correctly with extracted data"""
+    """Test that Simplified Transform layer functions work correctly with extracted data"""
 
-    print("🧪 Testing Transform Layer with Extracted Data...")
+    print("🧪 Testing Simplified Transform Layer with Extracted Data...")
 
     try:
         # Load data saved by Extract layer
         print("\n📁 Loading data saved by Extract layer...")
         raw_pools_df, raw_tvl_df = load_extracted_data()
 
-        # Test 1: Transform raw pools data
-        print("\n1️⃣ Testing transform_raw_pools_to_current_state()...")
-        current_state = transform_raw_pools_to_current_state(raw_pools_df)
-        print(f"✅ Transformed {current_state.height} current state records")
+        # Test 1: Create pool dimensions
+        print("\n1️⃣ Testing create_pool_dimensions()...")
+        dimensions_df = create_pool_dimensions(raw_pools_df)
+        print(f"✅ Created {dimensions_df.height} pool dimension records")
 
         # Test 2: Filter by projects
         print("\n2️⃣ Testing filter_pools_by_projects()...")
@@ -90,37 +87,28 @@ def test_transform_layer():
             "uniswap-v3",
             "fluid-dex",
         }
-        filtered = filter_pools_by_projects(current_state, target_projects)
-        print(f"✅ Filtered to {filtered.height} pools")
+        filtered_dimensions_df = filter_pools_by_projects(
+            dimensions_df, target_projects
+        )
+        print(f"✅ Filtered to {filtered_dimensions_df.height} pools")
 
-        # Test 3: Transform raw TVL data (no schema change, just validation)
-        print("\n3️⃣ Testing transform_raw_tvl_to_historical_tvl()...")
-        historical_tvl = transform_raw_tvl_to_historical_tvl(raw_tvl_df)
-        print(f"✅ Transformed {historical_tvl.height} historical TVL records")
+        # Test 3: Create historical facts (the key join!)
+        print("\n3️⃣ Testing create_historical_facts()...")
+        historical_facts_df = create_historical_facts(
+            raw_tvl_df, filtered_dimensions_df
+        )
+        print(f"✅ Created {historical_facts_df.height} historical facts records")
 
-        # Test 4: Create SCD2 dimensions (NEW SCHEMA)
-        print("\n4️⃣ Testing create_scd2_dimensions()...")
-        snap_date = date.today()
-        scd2_dims = create_scd2_dimensions(filtered, snap_date)
-        print(f"✅ Created {scd2_dims.height} SCD2 dimension records")
-
-        # Test 5: Create historical facts (NEW SCHEMA - the key join!)
-        print("\n5️⃣ Testing create_historical_facts()...")
-        historical_facts = create_historical_facts(historical_tvl, scd2_dims)
-        print(f"✅ Created {historical_facts.height} historical facts records")
-
-        # Test 6: Save only the actual transformations
-        print("\n6️⃣ Testing data persistence...")
-        from src.transformation.transformers import save_transformed_data
-
+        # Test 4: Save only the actual transformations
+        print("\n4️⃣ Testing data persistence...")
         today = date.today().strftime("%Y-%m-%d")
-        save_transformed_data(scd2_dims, historical_facts, today)
+        save_transformed_data(filtered_dimensions_df, historical_facts_df, today)
         print("✅ Saved transformed data to output directory")
 
-        # Test 7: Verify only the new output files exist
-        print("\n7️⃣ Verifying output files...")
+        # Test 5: Verify only the new output files exist
+        print("\n5️⃣ Verifying output files...")
         expected_files = [
-            "output/pool_dim_scd2.parquet",
+            "output/pool_dimensions.parquet",
             f"output/historical_facts_{today}.parquet",
         ]
 
@@ -132,13 +120,33 @@ def test_transform_layer():
                 print(f"❌ {file_path} missing")
                 return False
 
-        print("\n�� All Transform layer tests passed!")
+        # Test 6: Get summary statistics
+        print("\n6️⃣ Testing get_summary_stats()...")
+
+        # Dimensions stats
+        dimensions_stats = get_summary_stats(filtered_dimensions_df, "pool_dimensions")
+        print(
+            f"✅ Dimensions stats: {dimensions_stats['total_pools']} pools, "
+            f"{dimensions_stats['protocol_slug_unique']} protocols, "
+            f"${dimensions_stats['tvl_usd_sum']:,.0f} total TVL"
+        )
+
+        # Historical facts stats
+        facts_stats = get_summary_stats(historical_facts_df, "historical_facts")
+        print(
+            f"✅ Facts stats: {facts_stats['total_records']} records, "
+            f"{facts_stats['unique_pools']} unique pools, "
+            f"Date range: {facts_stats['date_range']}"
+        )
+
+        print("\n🎉 All Simplified Transform layer tests passed!")
         print("   ✅ Used data saved by Extract layer")
         print("   ✅ Transform layer processed data correctly")
         print("   ✅ Created only the NEW transformed files:")
-        print("   ✅ pool_dim_scd2.parquet (SCD2 dimensions)")
-        print(f"  ✅ historical_facts_{today}.parquet (joined facts)")
+        print("   ✅ - pool_dimensions.parquet (simplified dimensions)")
+        print(f"  ✅ - historical_facts_{today}.parquet (joined facts)")
         print("   ✅ Avoided duplicating raw data (already saved by extract layer)")
+        print("   ✅ Removed SCD2 complexity (dimensions are not slowly changing)")
 
         return True
 
