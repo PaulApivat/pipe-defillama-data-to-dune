@@ -111,7 +111,7 @@ def transform_raw_tvl_to_historical_tvl(raw_df: pl.DataFrame) -> pl.DataFrame:
             )
             # Select only the fields we need for historical TVL
             .select(
-                ["timestamp", "pool_id", "tvl_usd", "apy", "apy_base", "apy_reward"]
+                ["timestamp", "tvl_usd", "apy", "apy_base", "apy_reward", "pool_id"]
             )
         )
 
@@ -532,3 +532,157 @@ def get_summary_stats(df: pl.DataFrame, data_type: str) -> Dict[str, Any]:
 
     logger.info(f"Generated summary stats: {list(stats.keys())}")
     return stats
+
+
+def save_transformed_data(
+    scd2_df: pl.DataFrame,
+    historical_facts_df: pl.DataFrame,
+    today: str,
+) -> None:
+    """
+    Save transformed data to output directory
+
+    Args:
+        scd2_df: SCD2 dimensions data
+        historical_facts_df: Historical facts data
+        today: Date string for file naming
+    """
+    logger.info("Saving transformed data to output directory")
+
+    try:
+        # Save SCD2 dimensions
+        scd2_file = "output/pool_dim_scd2.parquet"
+        scd2_df.write_parquet(scd2_file)
+        logger.info(f"✅ Saved SCD2 dimensions to {scd2_file}")
+
+        # Save historical facts (the joined data)
+        historical_facts_file = f"output/historical_facts_{today}.parquet"
+        historical_facts_df.write_parquet(historical_facts_file)
+        logger.info(f"✅ Saved historical facts to {historical_facts_file}")
+
+        logger.info("🎉 All transformed data saved successfully!")
+
+    except Exception as e:
+        logger.error(f"❌ Error saving transformed data: {e}")
+        raise
+
+
+def main():
+    """
+    Main function to run the complete transformation pipeline
+    """
+    from datetime import date
+    import glob
+    import os
+
+    logger.info("🚀 Starting Transform Layer Pipeline")
+
+    try:
+        # Get today's date
+        today = date.today().strftime("%Y-%m-%d")
+
+        # Load extracted data
+        logger.info("�� Loading extracted data...")
+
+        # Find the most recent raw_pools parquet file
+        raw_pools_files = glob.glob("output/raw_pools_*.parquet")
+        if not raw_pools_files:
+            raise FileNotFoundError(
+                "No raw_pools parquet files found. Run extract layer first."
+            )
+
+        latest_raw_pools = max(raw_pools_files, key=os.path.getctime)
+        logger.info(f"Loading raw pools from: {latest_raw_pools}")
+
+        # Find the most recent raw_tvl parquet file
+        raw_tvl_files = glob.glob("output/raw_tvl_*.parquet")
+        if not raw_tvl_files:
+            raise FileNotFoundError(
+                "No raw_tvl parquet files found. Run extract layer first."
+            )
+
+        latest_raw_tvl = max(raw_tvl_files, key=os.path.getctime)
+        logger.info(f"Loading raw TVL from: {latest_raw_tvl}")
+
+        # Load the data
+        raw_pools_df = pl.read_parquet(latest_raw_pools)
+        raw_tvl_df = pl.read_parquet(latest_raw_tvl)
+
+        logger.info(f"Loaded {raw_pools_df.height} raw pool records")
+        logger.info(f"Loaded {raw_tvl_df.height} raw TVL records")
+
+        # Step 1: Transform raw pools to current state
+        logger.info("�� Step 1: Transforming raw pools to current state...")
+        current_state_df = transform_raw_pools_to_current_state(raw_pools_df)
+
+        # Step 2: Filter by target projects
+        logger.info("�� Step 2: Filtering by target projects...")
+        target_projects = {
+            "curve-dex",
+            "pancakeswap-amm",
+            "pancakeswap-amm-v3",
+            "aerodrome-slipstream",
+            "aerodrome-v1",
+            "uniswap-v2",
+            "uniswap-v3",
+            "fluid-dex",
+        }
+        filtered_pools_df = filter_pools_by_projects(current_state_df, target_projects)
+
+        # Step 3: Transform raw TVL to historical TVL
+        logger.info("🔄 Step 3: Transforming raw TVL to historical TVL...")
+        historical_tvl_df = transform_raw_tvl_to_historical_tvl(raw_tvl_df)
+
+        # Step 4: Create SCD2 dimensions
+        logger.info("🔄 Step 4: Creating SCD2 dimensions...")
+        snap_date = date.today()
+        scd2_df = create_scd2_dimensions(filtered_pools_df, snap_date)
+
+        # Step 5: Create historical facts (join TVL + SCD2)
+        logger.info("🔄 Step 5: Creating historical facts...")
+        historical_facts_df = create_historical_facts(historical_tvl_df, scd2_df)
+
+        # Step 6: Save all transformed data
+        logger.info("🔄 Step 6: Saving transformed data...")
+        save_transformed_data(
+            filtered_pools_df,  # Use filtered pools as current state
+            historical_tvl_df,
+            scd2_df,
+            historical_facts_df,
+            today,
+        )
+
+        # Step 7: Generate summary statistics
+        logger.info("🔄 Step 7: Generating summary statistics...")
+
+        # Current state stats
+        current_state_stats = get_summary_stats(filtered_pools_df, "current_state")
+        logger.info(
+            f"Current State Stats: {current_state_stats['total_pools']} pools, "
+            f"{current_state_stats['protocol_slug_unique']} protocols, "
+            f"${current_state_stats['tvl_usd_sum']:,.0f} total TVL"
+        )
+
+        # Historical TVL stats
+        tvl_stats = get_summary_stats(historical_tvl_df, "historical_tvl")
+        logger.info(
+            f"Historical TVL Stats: {tvl_stats['total_records']} records, "
+            f"{tvl_stats['unique_pools']} unique pools, "
+            f"Date range: {tvl_stats['date_range']}"
+        )
+
+        # SCD2 stats
+        logger.info(f"SCD2 Dimensions: {scd2_df.height} records")
+
+        # Historical facts stats
+        logger.info(f"Historical Facts: {historical_facts_df.height} records")
+
+        logger.info("�� Transform Layer Pipeline completed successfully!")
+
+    except Exception as e:
+        logger.error(f"❌ Transform Layer Pipeline failed: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    main()

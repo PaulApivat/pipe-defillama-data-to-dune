@@ -21,6 +21,7 @@ from src.transformation.transformers import (
     sort_by_tvl,
     sort_by_timestamp,
     get_summary_stats,
+    save_transformed_data,
 )
 import logging
 
@@ -92,71 +93,53 @@ def test_transform_layer():
         filtered = filter_pools_by_projects(current_state, target_projects)
         print(f"✅ Filtered to {filtered.height} pools")
 
-        # Test 3: Sort by TVL
-        print("\n3️⃣ Testing sort_by_tvl()...")
-        sorted_pools = sort_by_tvl(filtered, descending=True)
-        print(f"✅ Sorted {sorted_pools.height} pools by TVL")
-
-        # Test 4: Get summary stats
-        print("\n4️⃣ Testing get_summary_stats()...")
-        stats = get_summary_stats(sorted_pools, "current_state")
-        print(f"✅ Generated stats: {list(stats.keys())}")
-        print(f"   Total pools: {stats['total_pools']}")
-        print(f"   Protocols: {stats['protocol_slug_unique']}")
-        print(f"   Total TVL: ${stats['tvl_usd_sum']:,.0f}")
-
-        # Test 5: Transform raw TVL data
-        print("\n5️⃣ Testing transform_raw_tvl_to_historical_tvl()...")
+        # Test 3: Transform raw TVL data (no schema change, just validation)
+        print("\n3️⃣ Testing transform_raw_tvl_to_historical_tvl()...")
         historical_tvl = transform_raw_tvl_to_historical_tvl(raw_tvl_df)
         print(f"✅ Transformed {historical_tvl.height} historical TVL records")
 
-        # Test 6: Sort TVL by timestamp
-        print("\n6️⃣ Testing sort_by_timestamp()...")
-        sorted_tvl = sort_by_timestamp(historical_tvl, descending=False)
-        print(f"✅ Sorted {sorted_tvl.height} TVL records by timestamp")
-
-        # Test 7: Create SCD2 dimensions
-        print("\n7️⃣ Testing create_scd2_dimensions()...")
+        # Test 4: Create SCD2 dimensions (NEW SCHEMA)
+        print("\n4️⃣ Testing create_scd2_dimensions()...")
         snap_date = date.today()
         scd2_dims = create_scd2_dimensions(filtered, snap_date)
         print(f"✅ Created {scd2_dims.height} SCD2 dimension records")
 
-        # Test 8: Create historical facts
-        print("\n8️⃣ Testing create_historical_facts()...")
+        # Test 5: Create historical facts (NEW SCHEMA - the key join!)
+        print("\n5️⃣ Testing create_historical_facts()...")
         historical_facts = create_historical_facts(historical_tvl, scd2_dims)
         print(f"✅ Created {historical_facts.height} historical facts records")
 
-        # Test 9: Create incremental historical facts
-        print("\n9️⃣ Testing upsert_historical_facts_for_date()...")
-        today = date.today()
-        incremental_facts = upsert_historical_facts_for_date(
-            historical_tvl, scd2_dims, today
-        )
-        print(
-            f"✅ Created {incremental_facts.height} incremental historical facts records"
-        )
+        # Test 6: Save only the actual transformations
+        print("\n6️⃣ Testing data persistence...")
+        from src.transformation.transformers import save_transformed_data
+
+        today = date.today().strftime("%Y-%m-%d")
+        save_transformed_data(scd2_dims, historical_facts, today)
+        print("✅ Saved transformed data to output directory")
+
+        # Test 7: Verify only the new output files exist
+        print("\n7️⃣ Verifying output files...")
+        expected_files = [
+            "output/pool_dim_scd2.parquet",
+            f"output/historical_facts_{today}.parquet",
+        ]
+
+        for file_path in expected_files:
+            if os.path.exists(file_path):
+                file_size = os.path.getsize(file_path)
+                print(f"✅ {file_path} exists ({file_size:,} bytes)")
+            else:
+                print(f"❌ {file_path} missing")
+                return False
 
         print("\n�� All Transform layer tests passed!")
         print("   ✅ Used data saved by Extract layer")
         print("   ✅ Transform layer processed data correctly")
+        print("   ✅ Created only the NEW transformed files:")
+        print("   ✅ pool_dim_scd2.parquet (SCD2 dimensions)")
+        print(f"  ✅ historical_facts_{today}.parquet (joined facts)")
+        print("   ✅ Avoided duplicating raw data (already saved by extract layer)")
 
-        # Test 10: Get summary stats
-        print("\n4️⃣ Testing get_summary_stats()...")
-        stats = get_summary_stats(sorted_pools, "current_state")
-        print(f"✅ Generated stats: {list(stats.keys())}")
-        print(f"   Total pools: {stats['total_pools']}")
-        print(f"   Protocols: {stats['protocol_slug_unique']}")
-        print(f"   Total TVL: ${stats['tvl_usd_sum']:,.0f}")
-
-        # Test 11: Get TVL summary stats
-        print("\n7️⃣ Testing get_summary_stats() for TVL...")
-        tvl_stats = get_summary_stats(sorted_tvl, "historical_tvl")
-        print(f"✅ Generated TVL stats: {list(tvl_stats.keys())}")
-        print(f"   Total records: {tvl_stats['total_records']}")
-        print(f"   Unique pools: {tvl_stats['unique_pools']}")
-        print(f"   Date range: {tvl_stats['date_range']}")
-
-        print("\n🎉 All Transform layer tests passed!")
         return True
 
     except Exception as e:

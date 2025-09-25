@@ -103,10 +103,13 @@ def test_extract_layer():
         print(f"✅ Extracted {len(pool_ids)} pool IDs")
         print(f"   Sample IDs: {pool_ids[:3]}")
 
-        # Test 4: Fetch raw TVL data (small sample)
-        print("\n4️⃣ Testing fetch_raw_tvl_data() with sample...")
-        sample_pool_ids = pool_ids[:3]  # Test with just 3 pools
-        tvl_df = fetch_raw_tvl_data(sample_pool_ids)
+        # Test 4: Fetch raw TVL data (FULL HISTORICAL DATASET)
+        print("\n4️⃣ Testing fetch_raw_tvl_data() with FULL dataset...")
+        print("⚠️  This will fetch historical TVL data for ALL pools (1+ hours)...")
+        print("⚠️  Press Ctrl+C to cancel if needed...")
+
+        tvl_df = fetch_raw_tvl_data(pool_ids)  # Use ALL pool IDs, not just 3
+
         print(f"✅ Fetched {tvl_df.height} raw TVL records")
         print(f"   Columns: {tvl_df.columns}")
         print(f"   Sample data: {tvl_df.head(2)}")
