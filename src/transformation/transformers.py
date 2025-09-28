@@ -120,7 +120,13 @@ def create_historical_facts(
             )
             SELECT
                 t.date as timestamp 
-                , SPLIT_PART(d.pool_old, '-', 1) as pool_old_clean
+                , CASE 
+                    WHEN SPLIT_PART(d.pool_old, '-', 1) LIKE '0x%' 
+                    THEN SPLIT_PART(d.pool_old, '-', 1)
+                    WHEN SPLIT_PART(d.pool_old, '-', 2) LIKE '0x%' 
+                    THEN SPLIT_PART(d.pool_old, '-', 2)
+                    ELSE d.pool_old
+                  END as pool_old_clean
                 , t.pool_id 
                 , d.protocol_slug 
                 , d.chain

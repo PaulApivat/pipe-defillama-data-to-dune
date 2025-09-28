@@ -106,7 +106,18 @@ class YieldPoolsCurrentState:
         """Transform pool_old column to remove chain suffix"""
         self.logger.info("Transforming pool_old column")
         transformed_df = self.df.with_columns(
-            [pl.col("pool_old").str.split("-").list.get(0).alias("pool_old_clean")]
+            [
+                pl.when(
+                    pl.col("pool_old").str.split("-").list.get(0).str.starts_with("0x")
+                )
+                .then(pl.col("pool_old").str.split("-").list.get(0))
+                .when(
+                    pl.col("pool_old").str.split("-").list.get(1).str.starts_with("0x")
+                )
+                .then(pl.col("pool_old").str.split("-").list.get(1))
+                .otherwise(pl.col("pool_old"))
+                .alias("pool_old_clean")
+            ]
         )
         return YieldPoolsCurrentState(df=transformed_df)
 

@@ -105,7 +105,7 @@ def load_json(filepath: str) -> pl.DataFrame:
     with open(filepath, "r") as f:
         data = json.load(f)
 
-    df = pl.DataFrame(data)
+    df = pl.DataFrame(data, strict=False, infer_schema_length=10000)
 
     logger.info(f"Loaded {df.height} records from {filepath}")
     return df

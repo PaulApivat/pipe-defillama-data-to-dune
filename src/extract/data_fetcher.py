@@ -42,7 +42,7 @@ def fetch_raw_pools_data() -> pl.DataFrame:
         raw_data = get_pools_old()
 
         # Convert to Polars DataFrame with strict=False to handle mixed types
-        df = pl.DataFrame(raw_data, strict=False)
+        df = pl.DataFrame(raw_data, strict=False, infer_schema_length=10000)
 
         # Log the actual schema we got
         logger.info(f"Raw data schema: {df.schema}")
@@ -253,8 +253,9 @@ def fetch_raw_tvl_data(pool_ids: List[str]) -> pl.DataFrame:
                     }
                     all_tvl_records.append(record)
 
-        # Convert to Polars DataFrame with strict=False to handle mixed types
-        df = pl.DataFrame(all_tvl_records, strict=False)
+        # Convert to Polars DataFrame with increased schema inference length
+        # This prevents data type overflow errors with large datasets
+        df = pl.DataFrame(all_tvl_records, strict=False, infer_schema_length=10000)
 
         # Debug: Log the schema we got
         logger.info(f"Raw TVL data schema: {df.schema}")
@@ -345,3 +346,71 @@ def get_pool_ids_from_pools(df: pl.DataFrame) -> List[str]:
     pool_ids = df.select("pool").to_series().to_list()
     logger.info(f"Extracted {len(pool_ids)} pool IDs")
     return pool_ids
+
+
+def fetch_incremental_tvl_data(pool_ids: List[str], target_date: date) -> pl.DataFrame:
+    """
+    Fetch TVL data INCREMENTALLY for a specific date only
+
+    Strategy:
+    1. Check if we have existing TVL data for this date
+    2. If yes, return cached data
+    3. If no, fetch only the missing data for this specific date
+
+    Args:
+        pool_ids: List of pool identifiers
+        target_date: Target date for TVL data
+
+    Returns:
+        pl.DataFrame: TVL data for target date only
+    """
+    logger.info(f"🎯 INCREMENTAL: Fetching TVL data for {target_date} only")
+
+    # Check if we already have data for this date
+    cache_file = f"output/raw_tvl_{target_date.strftime('%Y-%m-%d')}.parquet"
+
+    if os.path.exists(cache_file):
+        logger.info(f"📦 Found cached TVL data for {target_date}, loading...")
+        cached_data = pl.read_parquet(cache_file)
+
+        # Verify the data is for the correct date
+        if cached_data.height > 0:
+            sample_date = cached_data.select("timestamp").head(1).item()
+            if str(sample_date).startswith(target_date.strftime("%Y-%m-%d")):
+                logger.info(
+                    f"✅ Using cached data: {cached_data.height} records for {target_date}"
+                )
+                return cached_data
+            else:
+                logger.warning(
+                    f"⚠️  Cached data date mismatch: {sample_date} != {target_date}"
+                )
+
+    # No cached data, need to fetch
+    logger.info(f"📡 No cached data found, fetching fresh data for {target_date}")
+    logger.warning("⚠️  This will still fetch ALL historical data, then filter")
+    logger.warning("⚠️  True incremental API calls require DeFiLlama API changes")
+
+    # Fetch all data (this is still the bottleneck)
+    all_tvl_data = fetch_raw_tvl_data(pool_ids)
+
+    # Filter to target date only
+    target_date_str = target_date.strftime("%Y-%m-%d")
+    try:
+        incremental_data = all_tvl_data.filter(
+            pl.col("timestamp").str.strptime(pl.Date, "%Y-%m-%d") == target_date
+        )
+    except Exception as e:
+        logger.warning(f"Date parsing failed, using string matching: {e}")
+        # Fallback to string matching if date parsing fails
+        incremental_data = all_tvl_data.filter(
+            pl.col("timestamp").str.contains(target_date_str)
+        )
+
+    # Cache the filtered data for future use
+    if incremental_data.height > 0:
+        logger.info(f"💾 Caching {incremental_data.height} records for {target_date}")
+        incremental_data.write_parquet(cache_file)
+
+    logger.info(f"✅ INCREMENTAL: {incremental_data.height} records for {target_date}")
+    return incremental_data

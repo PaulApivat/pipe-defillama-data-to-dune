@@ -1,310 +1,423 @@
 """
-Pipeline Orchestration - Orchestration Layer
+Pipeline Orchestrator - Orchestration Layer
 
-Pure workflow coordination functions that compose extract, transform, and load operations.
-No business logic, just orchestration.
+Coordinates the Extract → Transform → Load pipeline.
+Handles both initial load and daily updates (check freshness first)
 """
 
+import os
+import sys
+import json
+from datetime import date, datetime, timedelta
+from typing import Optional, List
+import logging
 import polars as pl
-from datetime import date
-from typing import Dict, Any, Tuple, Optional
+
+# Add src to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Extract layer imports
-from ..extract.data_fetcher import (
+from src.extract.data_fetcher import (
     fetch_raw_pools_data,
     fetch_raw_tvl_data,
-    filter_pools_by_projects,
-    get_pool_ids_from_pools,
 )
 
 # Transform layer imports
-from ..transformation.transformers import (
-    transform_raw_pools_to_current_state,
-    transform_raw_tvl_to_historical_tvl,
-    create_scd2_dimensions,
+from src.transformation.transformers import (
+    create_pool_dimensions,
     create_historical_facts,
-    filter_by_projects,
-    sort_by_tvl,
-    sort_by_timestamp,
-    get_summary_stats,
+    filter_pools_by_projects,
+    save_transformed_data,
 )
 
 # Load layer imports
-from ..load.local_storage import (
-    save_current_state_data,
-    save_tvl_data,
-    save_scd2_data,
-    save_historical_facts_data,
-    file_exists,
-    get_latest_file,
-)
-
-from ..load.dune_uploader import DuneUploader
-
-import logging
+from src.load.dune_uploader import DuneUploader
 
 logger = logging.getLogger(__name__)
 
-# Target projects
-TARGET_PROJECTS = {
-    "curve-dex",
-    "pancakeswap-amm",
-    "pancakeswap-amm-v3",
-    "aerodrome-slipstream",
-    "aerodrome-v1",
-}
+
+class PipelineOrchestrator:
+    """Orchestrates the complete data pipeline"""
+
+    def __init__(self, dune_api_key: Optional[str] = None, dry_run: bool = False):
+        """
+        Initialize the Pipeline orchestrator
+
+        Args:
+            dune_api_key: use env var
+            dry_run: If true, skip actual Dune uploads
+        """
+        self.dry_run = dry_run
+        self.dune_uploader = None if dry_run else DuneUploader(api_key=dune_api_key)
+
+        # Target projects for filtering
+        self.target_projects = {
+            "curve-dex",
+            "pancakeswap-amm",
+            "pancakeswap-amm-v3",
+            "aerodrome-slipstream",
+            "aerodrome-v1",
+            "uniswap-v2",
+            "uniswap-v3",
+            "fluid-dex",
+        }
+
+        # Cache directory for metadata
+        self.cache_dir = "output/cache"
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+    def _is_data_fresh(self, data_type: str, max_age_hours: int = 24) -> bool:
+        """
+        Check if data is fresh enough to skip re-fetching
+
+        Args:
+            data_type: Type of data to check (pools or tvl)
+            max_age_hours: Maximum age in hours before considering stale
+
+        Returns:
+            bool: True if data is fresh
+        """
+        cache_file = os.path.join(self.cache_dir, f"last_{data_type}_fetch.json")
+
+        if not os.path.exists(cache_file):
+            return False
+
+        try:
+            with open(cache_file, "r") as f:
+                metadata = json.load(f)
+
+            last_fetch = datetime.fromisoformat(metadata["timestamp"])
+            age_hours = (datetime.now() - last_fetch).total_seconds() / 3600
+
+            return age_hours < max_age_hours
+
+        except (json.JSONDecodeError, KeyError, ValueError):
+            return False
+
+    def _save_fetch_metadata(self, data_type: str) -> None:
+        """Save metadata about last fetch"""
+        cache_file = os.path.join(self.cach_dir, f"last_{data_type}_fetch.json")
+
+        metadata = {"timestamp": datetime.now().isoformat(), "data_type": data_type}
+
+        with open(cache_file, "w") as f:
+            json.dump(metadata, f, indent=2)
+
+    def _load_cached_data(
+        self, data_type: str, target_date: date
+    ) -> Optional[pl.DataFrame]:
+        """
+        Load cache data if available
+
+        Args:
+            data_type: Type of data to load ('pools' or 'tvl')
+            target_date: Target date for data
+
+        Returns:
+            pl.DataFrame or None if not available
+        """
+        if data_type == "pools":
+            # Pools (dimension data) is current state, use most recent
+            pattern = "output/raw_pools_*.parquet"
+        else:  # tvl
+            # TVL data is date-specific
+            pattern = f"output/raw_tvl_{target_date.strftime('%Y-%m-%d')}.parquet"
+
+        import glob
+
+        files = glob.glob(pattern)
+
+        if not files:
+            return None
+
+        # Get most recent file
+        latest_file = max(files, key=os.path.getctime)
+
+        try:
+            return pl.read_parquet(latest_file)
+        except Exception as e:
+            logger.warning(f"Failed to load cached {data_type} data: {e}")
+            return None
+
+    def run_initial_load(self) -> bool:
+        """
+        Run initial load of full historical dataset
+
+        Returns:
+            bool: True if successful
+        """
+        logger.info("🚀 Starting initial load pipeline...")
+
+        try:
+            # step 1: Extract raw data
+            logger.info("🔄 Step 1: Extracting raw data...")
+            raw_pools_df = fetch_raw_pools_data()
+            pool_ids = raw_pools_df.select("pool").to_series().to_list()
+            raw_tvl_df = fetch_raw_tvl_data(pool_ids)
+
+            # Save fetch metadata
+            self._save_fetch_metadata("pools")
+            self._save_fetch_metadata("tvl")
+
+            logger.info(
+                f"✅ Extracted {raw_pools_df.height} pools, {raw_tvl_df.height} TVL records"
+            )
+
+            # step 2: transform data
+            logger.info("🔄 Step 2: Transforming data...")
+            # create pool dimensions
+            dimensions_df = create_pool_dimensions(raw_pools_df)
+            # filter by target projects
+            filtered_dimensions_df = filter_pools_by_projects(
+                dimensions_df, self.target_projects
+            )
+            # create historical facts (Join TVL + dimensions )
+            historical_facts_df = create_historical_facts(
+                raw_tvl_df,
+                filtered_dimensions_df,
+                None,  # No date filter for initial load
+            )
+
+            logger.info(
+                f"✅ Transformed {filtered_dimensions_df.height} dimensions, {historical_facts_df.height} facts"
+            )
+
+            # step 3: save transformed data locally
+            logger.info("🔄 Step 3: Saving transformed data locally...")
+            today = date.today().strftime("%Y-%m-%d")
+            save_transformed_data(filtered_dimensions_df, historical_facts_df, today)
+
+            # step 4: load to Dune (if not dry run)
+            if not self.dry_run:
+                logger.info("🔄 Step 4: Loading data to Dune...")
+                self.dune_uploader.upload_full_historical_facts(historical_facts_df)
+                logger.info("✅ Initial loed to Dune completed successfully")
+            else:
+                logger.info("🔍 DRY RUN: Skipping Dune upload")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Initial load failed: {e}")
+            raise
+
+    def run_daily_update(self, target_date: Optional[date] = None) -> bool:
+        """
+        Run daily update pipeline
+
+        Args:
+            target_date: Date to update (defaults to today)
+        Returns:
+            bool: True if successful
+        """
+        if target_date is None:
+            target_date = date.today()
+
+        logger.info(f"🔄 Starting daily update pipeline for {target_date}")
+
+        try:
+            # Step 1: Extract raw data
+            logger.info("📁 Step 1: Extracting raw data...")
+
+            # Check if pools data is fresh
+            if self._is_data_fresh("pools"):
+                logger.info("�� Pools data is fresh, loading from cache...")
+                raw_pools_df = self._load_cached_data("pools", target_date)
+                if raw_pools_df is None:
+                    logger.info("📦 Cache miss, fetching fresh pools data...")
+                    raw_pools_df = fetch_raw_pools_data()
+                    self._save_fetch_metadata("pools")
+            else:
+                logger.info("📦 Pools data is stale, fetching fresh data...")
+                raw_pools_df = fetch_raw_pools_data()
+                self._save_fetch_metadata("pools")
+
+            # For TVL, we need to check if we have today's data
+            tvl_cache_file = (
+                f"output/raw_tvl_{target_date.strftime('%Y-%m-%d')}.parquet"
+            )
+            if os.path.exists(tvl_cache_file) and self._is_data_fresh("tvl"):
+                logger.info("📦 TVL data is fresh, loading from cache...")
+                raw_tvl_df = pl.read_parquet(tvl_cache_file)
+            else:
+                logger.info(
+                    "📦 TVL data is stale or missing, fetching INCREMENTAL data..."
+                )
+                pool_ids = raw_pools_df.select("pool").to_series().to_list()
+
+                # INCREMENTAL: Only fetch TVL data for the target date
+                logger.info(
+                    f"🎯 Fetching TVL data ONLY for {target_date} (incremental)"
+                )
+                raw_tvl_df = self._fetch_incremental_tvl_data(pool_ids, target_date)
+                self._save_fetch_metadata("tvl")
+
+            logger.info(
+                f"✅ Extracted {raw_pools_df.height} pools, {raw_tvl_df.height} TVL records"
+            )
+
+            # Step 2: Transform data
+            logger.info("🔄 Step 2: Transforming data...")
+
+            # Create pool dimensions
+            dimensions_df = create_pool_dimensions(raw_pools_df)
+
+            # Filter by target projects
+            filtered_dimensions_df = filter_pools_by_projects(
+                dimensions_df, self.target_projects
+            )
+
+            # Create historical facts (join TVL + dimensions)
+            historical_facts_df = create_historical_facts(
+                raw_tvl_df, filtered_dimensions_df, target_date
+            )
+
+            logger.info(
+                f"✅ Transformed to {filtered_dimensions_df.height} dimensions, {historical_facts_df.height} facts"
+            )
+
+            # Step 3: Save temporary daily data
+            logger.info("💾 Step 3: Saving temporary daily data...")
+            temp_file = f"output/cache/temp_daily_facts_{target_date.strftime('%Y-%m-%d')}.parquet"
+            historical_facts_df.write_parquet(temp_file)
+            logger.info(f"✅ Saved temporary data to {temp_file}")
+
+            # Step 4: Upsert daily facts to Dune (if not dry run)
+            if not self.dry_run:
+                logger.info(f"☁️ Step 4: Upserting daily facts for {target_date}...")
+                self.dune_uploader.upsert_daily_facts(historical_facts_df, target_date)
+
+                # Step 5: Cleanup temporary file after successful upload
+                logger.info("🧹 Step 5: Cleaning up temporary files...")
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    logger.info(f"✅ Cleaned up {temp_file}")
+
+                logger.info(
+                    f"✅ Daily update completed successfully for {target_date}!"
+                )
+            else:
+                logger.info("🔍 Dry run: Skipping Dune upload")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Daily update failed: {e}")
+            raise
+
+    def get_pipeline_status(self) -> dict:
+        """
+        Get current pipeline status
+
+        Returns:
+            dict: Pipeline status information
+        """
+        status = {
+            "timestamp": datetime.now().isoformat(),
+            "dry_run": self.dry_run,
+            "target_projects": list(self.target_projects),
+            "dune_connected": False,
+            "data_freshness": {
+                "pools": self._is_data_fresh("pools"),
+                "tvl": self._is_data_fresh("tvl"),
+            },
+        }
+
+        if not self.dry_run and self.dune_uploader:
+            try:
+                table_info = self.dune_uploader.get_table_info()
+                status["dune_connected"] = True
+                status["dune_table_info"] = table_info
+            except Exception as e:
+                status["dune_error"] = str(e)
+
+        return status
+
+    def _fetch_incremental_tvl_data(
+        self, pool_ids: List[str], target_date: date
+    ) -> pl.DataFrame:
+        """
+        Fetch TVL data INCREMENTALLY for target date (with smart caching)
+
+        Args:
+            pool_ids: List of pool IDs to fetch
+            target_date: Target date for TVL data
+
+        Returns:
+            DataFrame with TVL data for target date only
+        """
+        from src.extract.data_fetcher import fetch_incremental_tvl_data
+
+        logger.info(f"🎯 INCREMENTAL: Fetching TVL data for {target_date}")
+        logger.info(f"📊 Pool IDs to fetch: {len(pool_ids)}")
+
+        # Use the new incremental fetcher with caching
+        incremental_data = fetch_incremental_tvl_data(pool_ids, target_date)
+
+        logger.info(
+            f"✅ INCREMENTAL: Retrieved {incremental_data.height} records for {target_date}"
+        )
+
+        return incremental_data
 
 
-def run_current_state_pipeline() -> Tuple[pl.DataFrame, pl.DataFrame]:
-    """
-    Run the current state pipeline: extract -> transform -> load
+def main():
+    """Main function for running the pipeline"""
+    import argparse
 
-    Returns:
-        Tuple[pl.DataFrame, pl.DataFrame]: (current_state_df, scd2_df)
-    """
-    logger.info("🔄 Running current state pipeline...")
-
-    # Extract: Fetch raw pools data
-    logger.info("Step 1: Extracting raw pools data...")
-    raw_pools = fetch_raw_pools_data()
-
-    # Transform: Filter and transform to current state
-    logger.info("Step 2: Transforming to current state...")
-    filtered_pools = filter_pools_by_projects(raw_pools, TARGET_PROJECTS)
-    current_state = transform_raw_pools_to_current_state(filtered_pools)
-    current_state = sort_by_tvl(current_state, descending=True)
-
-    # Transform: Create SCD2 dimensions
-    logger.info("Step 3: Creating SCD2 dimensions...")
-    snap_date = date.today()
-    scd2_df = create_scd2_dimensions(current_state, snap_date)
-
-    # Load: Save data
-    logger.info("Step 4: Saving current state data...")
-    save_current_state_data(current_state)
-    save_scd2_data(scd2_df)
-
-    # Get summary stats
-    stats = get_summary_stats(current_state, "current_state")
-    logger.info(f"✅ Current state pipeline completed: {stats['total_records']} pools")
-
-    return current_state, scd2_df
-
-
-def run_tvl_pipeline(existing_tvl_file: Optional[str] = None) -> pl.DataFrame:
-    """
-    Run the TVL pipeline: extract -> transform -> load
-
-    Args:
-        existing_tvl_file: Optional existing TVL file for incremental updates
-
-    Returns:
-        pl.DataFrame: TVL data
-    """
-    logger.info("🔄 Running TVL pipeline...")
-
-    # Extract: Get pool IDs from current state
-    logger.info("Step 1: Getting pool IDs from current state...")
-    raw_pools = fetch_raw_pools_data()
-    filtered_pools = filter_pools_by_projects(raw_pools, TARGET_PROJECTS)
-    pool_ids = get_pool_ids_from_pools(filtered_pools)
-
-    # Extract: Fetch TVL data
-    logger.info("Step 2: Extracting TVL data...")
-    raw_tvl = fetch_raw_tvl_data(pool_ids)
-
-    # Transform: Convert to historical TVL format
-    logger.info("Step 3: Transforming to historical TVL...")
-    tvl_data = transform_raw_tvl_to_historical_tvl(raw_tvl)
-    tvl_data = sort_by_timestamp(tvl_data, descending=False)
-
-    # Load: Save data
-    logger.info("Step 4: Saving TVL data...")
-    save_tvl_data(tvl_data)
-
-    # Get summary stats
-    stats = get_summary_stats(tvl_data, "historical_tvl")
-    logger.info(f"✅ TVL pipeline completed: {stats['total_records']} records")
-
-    return tvl_data
-
-
-def run_historical_facts_pipeline(
-    tvl_file: Optional[str] = None, scd2_file: Optional[str] = None
-) -> pl.DataFrame:
-    """
-    Run the historical facts pipeline: load -> transform -> load
-
-    Args:
-        tvl_file: Optional TVL file path
-        scd2_file: Optional SCD2 file path
-
-    Returns:
-        pl.DataFrame: Historical facts data
-    """
-    logger.info("🔄 Running historical facts pipeline...")
-
-    # Load: Get TVL and SCD2 data
-    logger.info("Step 1: Loading TVL and SCD2 data...")
-
-    if tvl_file and file_exists(tvl_file):
-        tvl_data = pl.read_parquet(tvl_file)
-        logger.info(f"Loaded TVL data from {tvl_file}: {tvl_data.height} records")
-    else:
-        # Use latest TVL file
-        latest_tvl = get_latest_file("tvl_data_*.parquet")
-        if not latest_tvl:
-            raise FileNotFoundError("No TVL data file found")
-        tvl_data = pl.read_parquet(latest_tvl)
-        logger.info(f"Loaded TVL data from {latest_tvl}: {tvl_data.height} records")
-
-    if scd2_file and file_exists(scd2_file):
-        scd2_data = pl.read_parquet(scd2_file)
-        logger.info(f"Loaded SCD2 data from {scd2_file}: {scd2_data.height} records")
-    else:
-        # Use SCD2 file
-        scd2_path = "output/pool_dim_scd2.parquet"
-        if not file_exists(scd2_path):
-            raise FileNotFoundError("No SCD2 data file found")
-        scd2_data = pl.read_parquet(scd2_path)
-        logger.info(f"Loaded SCD2 data from {scd2_path}: {scd2_data.height} records")
-
-    # Transform: Create historical facts
-    logger.info("Step 2: Creating historical facts...")
-    historical_facts = create_historical_facts(tvl_data, scd2_data)
-
-    # Load: Save historical facts
-    logger.info("Step 3: Saving historical facts...")
-    save_historical_facts_data(historical_facts)
-
-    # Get summary stats
-    stats = get_summary_stats(historical_facts, "historical_facts")
-    logger.info(
-        f"✅ Historical facts pipeline completed: {stats['total_records']} records"
+    parser = argparse.ArgumentParser(description="DeFillama Data Pipeline")
+    parser.add_argument(
+        "--mode",
+        choices=["initial", "daily"],
+        required=True,
+        help="Pipeline model: intial load or daily update",
+    )
+    parser.add_argument(
+        "--date", type=str, help="Target date for daily update (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run in dry-run mode (no Dune uploads)",
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Enable verbose logging"
     )
 
-    return historical_facts
+    args = parser.parse_args()
 
+    # setup logging
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
 
-def run_dune_upload_pipeline(historical_facts_file: Optional[str] = None) -> bool:
-    """
-    Run the Dune upload pipeline: load -> upload
-
-    Args:
-        historical_facts_file: Optional historical facts file path
-
-    Returns:
-        bool: True if successful
-    """
-    logger.info("🔄 Running Dune upload pipeline...")
-
-    # Load: Get historical facts data
-    logger.info("Step 1: Loading historical facts data...")
-
-    if historical_facts_file and file_exists(historical_facts_file):
-        historical_facts = pl.read_parquet(historical_facts_file)
-        logger.info(
-            f"Loaded historical facts from {historical_facts_file}: {historical_facts.height} records"
-        )
-    else:
-        # Use latest historical facts file
-        latest_facts = get_latest_file("historical_facts_*.parquet")
-        if not latest_facts:
-            raise FileNotFoundError("No historical facts file found")
-        historical_facts = pl.read_parquet(latest_facts)
-        logger.info(
-            f"Loaded historical facts from {latest_facts}: {historical_facts.height} records"
-        )
-
-    # Load: Upload to Dune
-    logger.info("Step 2: Uploading to Dune...")
-
-    # Create Dune uploader
-    dune_uploader = DuneUploader()
-
-    # Define table schema
-    schema = {
-        "timestamp": "date",
-        "pool_old_clean": "string",
-        "pool_id": "string",
-        "protocol_slug": "string",
-        "chain": "string",
-        "symbol": "string",
-        "tvl_usd": "double",
-        "apy": "double",
-        "apy_base": "double",
-        "apy_reward": "double",
-        "valid_from": "date",
-        "valid_to": "date",
-        "is_current": "boolean",
-        "attrib_hash": "string",
-        "is_active": "boolean",
-    }
-
-    # Create table
-    dune_uploader.create_table("defillama_historical_facts", schema)
-
-    # Upload data
-    data = historical_facts.to_dicts()
-    dune_uploader.upload_data("defillama_historical_facts", data)
-
-    logger.info(f"✅ Dune upload pipeline completed: {len(data)} records uploaded")
-    return True
-
-
-def run_full_pipeline() -> Dict[str, Any]:
-    """
-    Run the complete pipeline: current state -> TVL -> historical facts -> Dune upload
-
-    Returns:
-        Dict: Pipeline results and statistics
-    """
-    logger.info("🚀 Running full pipeline...")
-
-    results = {}
+    # initialize orchestrator
+    orchestrator = PipelineOrchestrator(dry_run=args.dry_run)
 
     try:
-        # Step 1: Current state pipeline
-        logger.info("=" * 50)
-        logger.info("STEP 1: CURRENT STATE PIPELINE")
-        logger.info("=" * 50)
-        current_state, scd2_df = run_current_state_pipeline()
-        results["current_state"] = {
-            "records": current_state.height,
-            "pools": current_state.select(pl.col("pool").n_unique()).item(),
-        }
+        if args.mode == "initial":
+            logger.info("🚀 Running initial load...")
+            success = orchestrator.run_initial_load()
+        elif args.mode == "daily":
+            target_date = None
+            if args.date:
+                target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
+            logger.info(f"🔄 Running daily update for {target_date} or 'today'...")
+            success = orchestrator.run_daily_update(target_date)
 
-        # Step 2: TVL pipeline
-        logger.info("=" * 50)
-        logger.info("STEP 2: TVL PIPELINE")
-        logger.info("=" * 50)
-        tvl_data = run_tvl_pipeline()
-        results["tvl"] = {
-            "records": tvl_data.height,
-            "pools": tvl_data.select(pl.col("pool_id").n_unique()).item(),
-        }
-
-        # Step 3: Historical facts pipeline
-        logger.info("=" * 50)
-        logger.info("STEP 3: HISTORICAL FACTS PIPELINE")
-        logger.info("=" * 50)
-        historical_facts = run_historical_facts_pipeline()
-        results["historical_facts"] = {
-            "records": historical_facts.height,
-            "pools": historical_facts.select(pl.col("pool_id").n_unique()).item(),
-        }
-
-        # Step 4: Dune upload pipeline
-        logger.info("=" * 50)
-        logger.info("STEP 4: DUNE UPLOAD PIPELINE")
-        logger.info("=" * 50)
-        dune_success = run_dune_upload_pipeline()
-        results["dune_upload"] = {"success": dune_success}
-
-        logger.info("🎉 Full pipeline completed successfully!")
-        return results
+        if success:
+            logger.info("✅ Pipeline completed successfully")
+            return 0
+        else:
+            logger.error("❌ Pipeline failed")
+            return 1
 
     except Exception as e:
         logger.error(f"❌ Pipeline failed: {e}")
-        results["error"] = str(e)
-        raise
+        return 1
+
+
+if __name__ == "__main__":
+    exit(main())
