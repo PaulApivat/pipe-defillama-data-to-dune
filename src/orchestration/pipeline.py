@@ -96,7 +96,7 @@ class PipelineOrchestrator:
 
     def _save_fetch_metadata(self, data_type: str) -> None:
         """Save metadata about last fetch"""
-        cache_file = os.path.join(self.cach_dir, f"last_{data_type}_fetch.json")
+        cache_file = os.path.join(self.cache_dir, f"last_{data_type}_fetch.json")
 
         metadata = {"timestamp": datetime.now().isoformat(), "data_type": data_type}
 

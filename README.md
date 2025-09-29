@@ -4,75 +4,108 @@ A pipeline that extracts Pool TVL and APY data from DeFiLlama APIs and prepares 
 
 ## Architecture Overview
 
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   EXTRACT       │    │   TRANSFORM      │    │      LOAD       │
+│                 │    │                  │    │                 │
+│ raw_pools_*.pq  │───▶│ pool_dimensions  │    │                 │
+│ raw_tvl_*.pq    │───▶│                  │───▶│ defillama_      │
+│                 │    │                  │    │ historical_     │
+│                 │    │ historical_facts │    │ facts           │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                                │                        │
+                                ▼                        ▼
+                       ┌──────────────────┐    ┌─────────────────┐
+                       │   ORCHESTRATION  │    │   SCHEDULER     │
+                       │                  │    │                 │
+                       │ - Daily facts    │    │ - Daily cron    │
+                       │   only           │    │ - Error handling│
+                       └──────────────────┘    └─────────────────┘
+
+```
+
+
+## Project Structure
+
+```
+pipe-defillama-data-to-dune/
+├── src/
+│   ├── extract/                 
+│   │   ├── defillama_api.py     
+│   │   ├── data_fetcher.py      
+│   │   └── schemas.py           
+
+│   ├── transformation/          
+│   │   ├── schemas.py           
+│   │   ├── validators.py        
+│   │   └── transformers.py      
+
+│   ├── load/                    
+│   │   ├── local_storage.py     
+│   │   └── dune_uploader.py     
+
+│   ├── orchestration/           
+│   │   ├── pipeline.py          
+│   │   └── scheduler.py         
+│   │   └── incremental_pipeline.py       (# decrecated)
+│   │   └── pipeline_test.py              (# decrecated)
+
+├── .github/                     
+│   ├── workflows/  
+│   │   └── defillama_daily_pipeline.yml       
+
+├── tests/ 
+│   ├── test_extract_layer.py
+│   ├── test_transform_layer.py
+│   ├── test_full_pipeline.py
+│   ├── test_github_actions.py
+│   ├── test_incremental_caching.py       # for debugging
+
+├── output/  
+├── debug/ 
+├── requirements.txt
+├── scripts/                        
+├── notebooks/                                     
+│   
+├── README.md/                        
+│  
+└── requirements.txt                        
+```
+
+## Primary Operations & Architectural Principles
+
+This pipeline follows Persistent ETL 
+
+### 1. **Extract** (Dimension & Fact Raw Data)
+- No imports from transform or load
+- Pure I/O operations only
+- Handles API rate limiting and retries
+- Stores raw data for testing
+
+### 2. **Transform** (Fact Table)
+- Pure functions (input → output)
+- No I/O operations
+- Unit testable and deterministic
+- Stores transformed data for testing
+
+### 3. **Load**
+- Handles local files and external uploads
+- No business logic
+
+### 4. **Orchestration**
+- Pure workflow coordination
+- Composes extract, transform, and load
+- No business logic
+
+
 - **Functional Pipeline**: Method chaining for composable data transformations
+- **Abstract Classes**: For tracking state, external connections
 - **Modular Design**: Separation of concerns with clear boundaries
 - **Schema-First**: Pydantic validation and Polars schemas
 - **Reliability**: Exponential backoff, retry logic, and idempotent operations
 - **Performance**: Polars for fast data processing, DuckDB for analytics
 - **Data Quality**: Comprehensive validation and quality checks
 - **Observability**: Detailed logging and error handling
-
-## Project Structure
-
-```
-pipe-defillama-data-to-dune/
-├── src/                          # Core application logic
-│   ├── coreutils/                 # Shared utilities
-│   │   ├── request.py              # HTTP client with retry logic
-│   │   ├── data.py                 # Data conversion utilities
-│   │   ├── env.py                  # Environment management
-│   │   └── time.py                 # Time utilities
-│   └── datasources/              # Data source implementations
-│       └── defillama/
-│           └── yieldpools/
-│               ├── schemas.py         # Pydantic & Polars schemas
-│               ├── current_state.py   # Current state data handler (primary)
-│               ├── historical_tvl.py  # Historical TVL data handler (primary)
-│               └── metadata.py        # Legacy metadata handler (deprecated)
-├── scripts/                        
-│   ├── fetch_current_state.py                 # Fetch current pool state (PRIMARY)
-│   ├── fetch_tvl.py                           # Fetch historical TVL data (PRIMARY)
-│   ├── export_current_state_for_dune.py       # Export current state for Dune (PRIMARY)
-│   ├── export_tvl_for_dune.py                 # Export TVL data for Dune (PRIMARY)
-│   ├── fetch_yields.py                        # Fetch yield pool metadata (legacy)
-│   ├── convert_tvl_to_parquet.py              # Convert JSON to Parquet (utility)
-│   └── join_and_enrich_data.py                # Data joining and enrichment (utility)
-├── notebooks/                    
-│   └── defillama_data_quality_checks.ipynb
-├── output/                          # Generated data files (gitignored)
-│   ├── tvl_data.json                          # Historical TVL data
-│   ├── tvl_data.parquet                       # Compressed TVL data
-│   ├── current_state.json                     # Current pool states
-│   ├── current_state.parquet                  # Compressed current state
-│   ├── tvl_data_for_dune.csv                  # Dune-optimized TVL export
-│   └── current_state_for_dune.csv             # Dune-optimized current state
-├── docs/                        
-│   └── dune_upload_guide.md         # Dune Analytics integration guide
-└── requirements.txt                           # Python dependencies
-```
-
-## Primary Operations
-
-This pipeline focuses on two main data flows:
-
-### 1. **Current State Data** (Dimension Table)
-- **File**: `src/datasources/defillama/yieldpools/current_state.py`
-- **Class**: `YieldPoolsCurrentState`
-- **Script**: `scripts/fetch_current_state.py`
-- **Purpose**: Fetches current pool metadata, TVL, and APY data
-- **Output**: `output/current_state_YYYY-MM-DD.parquet`
-
-### 2. **Historical TVL Data** (Fact Table)
-- **File**: `src/datasources/defillama/yieldpools/historical_tvl.py`
-- **Class**: `YieldPoolsTVLFact`
-- **Script**: `scripts/fetch_tvl.py`
-- **Purpose**: Fetches historical time-series TVL and APY data
-- **Output**: `output/tvl_data_YYYY-MM-DD.parquet`
-
-### 3. **Dune Analytics Export**
-- **Scripts**: `export_current_state_for_dune.py`, `export_tvl_for_dune.py`
-- **Purpose**: Transform and export data for Dune Analytics consumption
-- **Output**: `output/*_for_dune.csv`
 
 ## Quick Start
 
@@ -96,62 +129,49 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Basic Usage
+### Testing
 
 ```bash
-# 1. Fetch current pool state data (PRIMARY)
-python -m scripts.fetch_current_state
+# 1. Fetch raw data 
+python -m tests.test_extract_layer
 
-# 2. Fetch historical TVL data (PRIMARY)
-python -m scripts.fetch_tvl
+# 2. Transformations
+python -m tests.test_transform_layer
 
-# 3. Export data for Dune Analytics (PRIMARY)
-python -m scripts.export_current_state_for_dune
-python -m scripts.export_tvl_for_dune
+# 3. End-to-End testing and initial load to Dune
+python -m tests.test_full_pipeline
 
-# 4. Explore data quality
-jupyter notebook notebooks/defillama_data_quality_checks.ipynb
-```
+# 4. Setup Github secrets before testing Github Actions
+python -m tests.test_github_actions
 
-### Functional Pipeline Example
-
-The pipeline uses method chaining for composable data transformations:
-
-```python
-# Current State Pipeline
-current_state = (
-    YieldPoolsCurrentState.fetch()
-    .filter_by_projects(TARGET_PROJECTS)
-    .transform_pool_old()
-    .validate_schema(CURRENT_STATE_SCHEMA)
-    .sort_by_tvl(descending=True)
-)
-
-# Historical TVL Pipeline
-tvl_data = (
-    YieldPoolsTVLFact.fetch_incremental_tvl(metadata_source=metadata)
-    .validate_schema()
-    .sort_by_timestamp(descending=False)
-)
+# 4. Fast data exploration via SQL
+duckdb
 ```
 
 ## Data Model
 
 ### Star Schema Design
 
-**Fact Table: `tvl_data`**
+**Fact Table: `HISTORICAL_FACTS_SCHEMA`**
 - Historical TVL and APY data over time
 - Primary key: `(pool_id, timestamp)`
 - Measures: `tvl_usd`, `apy`, `apy_base`, `apy_reward`
 
-**Dimension Table: `current_state`**
-- Current pool metadata and state
+**Dimension Table: `POOL_DIM_SCHEMA`**
+- Pool metadata and state (only current, no history)
 - Primary key: `pool`
 - Attributes: `protocol_slug`, `chain`, `symbol`, `pool_old`, etc.
 
+### Simplifed Transformation (No slowly-changing dimension complexity needed)
+
+**Joined Table: `HISTORICAL_FACTS_SCHEMA`**
+- Initial Load to Dune (join Dimension & Fact table)
+- Primary Key: `pool_old_clean`, `timestamp`
+
+
 ### Data Dictionary
 
-#### TVL Data (Fact Table) - `HISTORICAL_TVL_SCHEMA`
+#### Fact Table - `HISTORICAL_FACTS_SCHEMA`
 | Column | Type | Description |
 |--------|------|-------------|
 | `timestamp` | STRING | Data point timestamp (ISO 8601) |
@@ -161,7 +181,7 @@ tvl_data = (
 | `apy_reward` | FLOAT64 | Reward APY component |
 | `pool_id` | STRING | Unique pool identifier |
 
-#### Current State (Dimension Table) - `CURRENT_STATE_SCHEMA`
+#### Dimension Table - `POOL_DIM_SCHEMA`
 | Column | Type | Description |
 |--------|------|-------------|
 | `pool` | STRING | Pool identifier (join key) |
@@ -177,86 +197,19 @@ tvl_data = (
 | `apy_reward` | FLOAT64 | Current Reward APY |
 | `pool_old` | STRING | Legacy pool identifier |
 
-## Key Features
 
-### 1. **Reliability & Resilience**
-- **Exponential Backoff**: Automatic retry with increasing delays
-- **Rate Limiting**: Respects API rate limits
-- **Idempotent Operations**: Safe to re-run without side effects
-- **Error Handling**: Comprehensive exception handling and logging
-
-### 2. **Data Quality & Validation**
-- **Schema Validation**: Pydantic models ensure data integrity
-- **Type Safety**: Strong typing throughout the pipeline
-- **Data Quality Checks**: Comprehensive validation in Jupyter notebooks
-- **Null Handling**: Proper handling of missing values
-
-### 3. **Performance & Scalability**
-- **Polars**: Fast DataFrame operations for large datasets
-- **DuckDB**: In-memory analytics for data exploration
-- **Parquet**: Columnar storage for efficient compression
-- **Lazy Evaluation**: Optimized query execution
-
-### 4. **Functional Programming & Data Engineering Best Practices**
-- **Method Chaining**: Composable data transformations with `.pipe()` operations
-- **Immutable Operations**: Each transformation returns a new instance
-- **Pure Functions**: Predictable, testable data processing functions
-- **Separation of Concerns**: Clear module boundaries
-- **DRY Principle**: Reusable utilities and functions
-- **Configuration Management**: Environment-based settings
-- **Version Control**: Proper .gitignore and clean commits
-
-## Data Pipeline Flow
-
-```mermaid
-graph TD
-    A[DeFiLlama APIs] --> B[Data Extraction]
-    B --> C[Schema Validation]
-    C --> D[Data Transformation]
-    D --> E[Quality Checks]
-    E --> F[Storage]
-    F --> G[Dune Analytics Export]
-    
-    B --> B1[Current State API]
-    B --> B2[TVL Chart API]
-    
-    C --> C1[Pydantic Validation]
-    C --> C2[Type Conversion]
-    
-    D --> D1[Polars Processing]
-    D --> D2[Data Enrichment]
-    
-    E --> E1[Missing Value Analysis]
-    E --> E2[Duplicate Detection]
-    E --> E3[Data Range Validation]
-    
-    F --> F1[JSON Files]
-    F --> F2[Parquet Files]
-    
-    G --> G1[CSV Export]
-    G --> G2[Dune Upload]
-```
 
 ## Development
 
 ### Adding New Data Sources
 
-1. Create new module in `src/datasources/`
-2. Define Pydantic schemas in `schemas.py`
+1. Create new target projects in `src/extract/data_fetcher.py`
+1. Add new endpoints in `src/extract/defillama_api.py`
+2. Define Pydantic schemas in `src/extract/schemas.py`
 3. Implement data fetching logic
 4. Add data quality checks
-5. Create export scripts for target systems
+5. Run `tests.test_extract_layer`
 
-### Running Tests
-
-```bash
-# Run data quality checks
-jupyter notebook notebooks/defillama_data_quality_checks.ipynb
-
-# Test individual components
-python -m scripts.fetch_current_state
-python -m scripts.export_tvl_for_dune
-```
 
 ### Data Exploration
 
@@ -267,29 +220,18 @@ import polars as pl
 # Connect to DuckDB
 conn = duckdb.connect(":memory:")
 
-# Query TVL data
-tvl_data = conn.execute("""
+# Query Pool Dimensions
+raw_pools = conn.execute("""
     SELECT 
-        pool_id,
-        timestamp,
-        tvlUsd,
-        apy
-    FROM read_parquet('output/tvl_data.parquet')
-    WHERE pool_id = 'your-pool-id'
-    ORDER BY timestamp
+        *
+    FROM read_parquet('output/raw_pools_2025-09-28.parquet')
 """).fetchdf()
 
-# Query current state
-current_state = conn.execute("""
+# Query Facts
+raw_tvl = conn.execute("""
     SELECT 
-        pool,
-        protocol_slug,
-        chain,
-        symbol,
-        tvl_usd,
-        apy
-    FROM read_parquet('output/current_state.parquet')
-    WHERE protocol_slug = 'curve-dex'
+        *
+    FROM read_parquet('output/raw_tvl_2025-09-28.parquet')
 """).fetchdf()
 ```
 
@@ -300,18 +242,8 @@ current_state = conn.execute("""
 Create a `.env` file in the project root:
 
 ```env
-# DeFiLlama API Configuration
-DEFILLAMA_API_KEY=your_api_key_here
-DEFILLAMA_BASE_URL=https://yields.llama.fi
-
 # Dune Analytics Configuration
 DUNE_API_KEY=your_dune_api_key
-DUNE_QUERY_ID=your_query_id
-
-# Data Processing Configuration
-BATCH_SIZE=1000
-RATE_LIMIT_DELAY=0.1
-MAX_RETRIES=5
 ```
 
 ## Monitoring & Observability
@@ -331,10 +263,10 @@ MAX_RETRIES=5
 ## Future Enhancements
 
 ### Immediate (Next Sprint)
-- [ ] Unit test suite with pytest
-- [ ] CI/CD pipeline with GitHub Actions
+- [x] Unit test suite with pytest
+- [x] CI/CD pipeline with GitHub Actions
 - [ ] Data quality dashboard
-- [ ] Automated alerting system
+- [x] Automated alerting system
 
 ### Medium Term
 - [ ] Real-time streaming pipeline

@@ -25,7 +25,24 @@
 
 ### ✅ Required GitHub Secrets
 - [ ] `DUNE_API_KEY` - Dune Analytics API key
-- [ ] Any other required environment variables
+- [ ] `EMAIL_USERNAME` - Gmail address for sending notifications
+- [ ] `EMAIL_PASSWORD` - Gmail app password (not regular password)
+- [ ] `NOTIFICATION_EMAIL` - Email address to receive notifications
+
+### 📧 Email Notification Setup
+1. **Create Gmail App Password:**
+   - Go to Google Account settings
+   - Security → 2-Step Verification (enable if not already)
+   - Security → App passwords
+   - Generate password for "Mail"
+   - Use this password (not your regular Gmail password)
+
+2. **Add GitHub Secrets:**
+   - Go to your GitHub repo → Settings → Secrets and variables → Actions
+   - Add these secrets:
+     - `EMAIL_USERNAME`: your-gmail@gmail.com
+     - `EMAIL_PASSWORD`: the 16-character app password
+     - `NOTIFICATION_EMAIL`: where you want to receive notifications
 
 ## Production Monitoring
 
