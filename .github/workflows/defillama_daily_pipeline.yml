@@ -1,0 +1,99 @@
+name: DeFiLlama Data Pipeline
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # 6 AM UTC daily
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Daily Pipeline
+        env:
+          DUNE_API_KEY: ${{ secrets.DUNE_API_KEY }}
+        run: |
+          echo "🚀 Starting DeFiLlama Daily Pipeline at $(date)"
+          python -m src.orchestration.pipeline --mode daily --verbose
+          echo "✅ Pipeline completed at $(date)"
+
+      - name: Upload logs and metrics
+        uses: actions/upload-artifact@v3
+        with:
+          name: pipeline-logs-${{ github.run_number }}
+          path: |
+            output/
+            *.log
+          retention-days: 30
+
+      - name: Pipeline Summary
+        if: always()
+        run: |
+          echo "📊 Pipeline Summary for Run #${{ github.run_number }}"
+          echo "⏰ Started: ${{ github.event.head_commit.timestamp }}"
+          echo "🔄 Status: ${{ job.status }}"
+          echo "📁 Artifacts: pipeline-logs-${{ github.run_number }}"
+
+      - name: Notify Success
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "✅ DeFiLlama Pipeline Success - Run #${{ github.run_number }}"
+          to: ${{ secrets.NOTIFICATION_EMAIL }}
+          from: ${{ secrets.EMAIL_USERNAME }}
+          body: |
+            🎉 DeFiLlama Data Pipeline completed successfully!
+            
+            📊 Run Details:
+            - Run Number: #${{ github.run_number }}
+            - Repository: ${{ github.repository }}
+            - Branch: ${{ github.ref_name }}
+            - Commit: ${{ github.sha }}
+            - Completed: $(date)
+            
+            📁 Logs and artifacts are available in the GitHub Actions run.
+            🔗 View run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Notify Failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "❌ DeFiLlama Pipeline Failed - Run #${{ github.run_number }}"
+          to: ${{ secrets.NOTIFICATION_EMAIL }}
+          from: ${{ secrets.EMAIL_USERNAME }}
+          body: |
+            🚨 DeFiLlama Data Pipeline failed!
+            
+            📊 Run Details:
+            - Run Number: #${{ github.run_number }}
+            - Repository: ${{ github.repository }}
+            - Branch: ${{ github.ref_name }}
+            - Commit: ${{ github.sha }}
+            - Failed: $(date)
+            
+            🔍 Please check the logs for details.
+            🔗 View run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            📁 Logs and artifacts are available in the GitHub Actions run.
