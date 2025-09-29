@@ -232,25 +232,19 @@ class PipelineOrchestrator:
                 raw_pools_df = fetch_raw_pools_data()
                 self._save_fetch_metadata("pools")
 
-            # For TVL, we need to check if we have today's data
-            tvl_cache_file = (
-                f"output/raw_tvl_{target_date.strftime('%Y-%m-%d')}.parquet"
+            # For TVL, we always fetch ALL historical data (DeFiLlama API limitation)
+            # Then we filter for today's data in the append logic
+            logger.info(
+                "📦 Fetching ALL historical TVL data (DeFiLlama API limitation)..."
             )
-            if os.path.exists(tvl_cache_file) and self._is_data_fresh("tvl"):
-                logger.info("📦 TVL data is fresh, loading from cache...")
-                raw_tvl_df = pl.read_parquet(tvl_cache_file)
-            else:
-                logger.info(
-                    "📦 TVL data is stale or missing, fetching INCREMENTAL data..."
-                )
-                pool_ids = raw_pools_df.select("pool").to_series().to_list()
+            pool_ids = raw_pools_df.select("pool").to_series().to_list()
 
-                # INCREMENTAL: Only fetch TVL data for the target date
-                logger.info(
-                    f"🎯 Fetching TVL data ONLY for {target_date} (incremental)"
-                )
-                raw_tvl_df = self._fetch_incremental_tvl_data(pool_ids, target_date)
-                self._save_fetch_metadata("tvl")
+            # Fetch ALL historical data (not incremental)
+            logger.info(
+                f"🎯 Fetching ALL historical TVL data for {len(pool_ids)} pools..."
+            )
+            raw_tvl_df = fetch_raw_tvl_data(pool_ids)
+            self._save_fetch_metadata("tvl")
 
             logger.info(
                 f"✅ Extracted {raw_pools_df.height} pools, {raw_tvl_df.height} TVL records"
@@ -282,10 +276,21 @@ class PipelineOrchestrator:
             historical_facts_df.write_parquet(temp_file)
             logger.info(f"✅ Saved temporary data to {temp_file}")
 
-            # Step 4: Upsert daily facts to Dune (if not dry run)
+            # Step 4: Upload facts to Dune (if not dry run)
             if not self.dry_run:
-                logger.info(f"☁️ Step 4: Upserting daily facts for {target_date}...")
-                self.dune_uploader.upsert_daily_facts(historical_facts_df, target_date)
+                # Check if this is the first run (table doesn't exist or is empty)
+                if self._is_first_run():
+                    logger.info(
+                        f"☁️ Step 4: First run - uploading FULL historical facts..."
+                    )
+                    self.dune_uploader.upload_full_historical_facts(historical_facts_df)
+                else:
+                    logger.info(
+                        f"☁️ Step 4: Subsequent run - appending daily facts for {target_date}..."
+                    )
+                    self.dune_uploader.append_daily_facts(
+                        historical_facts_df, target_date
+                    )
 
                 # Step 5: Cleanup temporary file after successful upload
                 logger.info("🧹 Step 5: Cleaning up temporary files...")
@@ -304,6 +309,33 @@ class PipelineOrchestrator:
         except Exception as e:
             logger.error(f"❌ Daily update failed: {e}")
             raise
+
+    def _is_first_run(self) -> bool:
+        """
+        Check if this is the first run (table doesn't exist or is empty)
+
+        Returns:
+            bool: True if this is the first run
+        """
+        try:
+            # Try to get table info
+            url = f"{self.dune_uploader.base_url}/table/{self.dune_uploader.namespace}/{self.dune_uploader.facts_table}"
+            response = self.dune_uploader.session.get(url)
+
+            if response.status_code == 404:
+                logger.info("Table doesn't exist yet - this is the first run")
+                return True
+
+            # If table exists, check if it's empty by trying to get row count
+            # For now, we'll be conservative and assume it's not the first run
+            # In production, you'd want to query the actual row count
+            logger.info("Table exists - assuming this is not the first run")
+            return False
+
+        except Exception as e:
+            logger.warning(f"Could not check if this is first run: {e}")
+            # If we can't check, assume it's the first run to be safe
+            return True
 
     def get_pipeline_status(self) -> dict:
         """

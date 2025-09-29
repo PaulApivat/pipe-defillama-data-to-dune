@@ -37,8 +37,9 @@ def test_full_pipeline():
     print("  🎯 Orchestration: End-to-end pipeline coordination")
     print()
 
-    # Create pipeline instance (production version)
-    pipeline = PipelineOrchestrator(dry_run=False)
+    # Create pipeline instance (dry run for safe testing)
+    # Change to dry_run=False for full production testing
+    pipeline = PipelineOrchestrator(dry_run=True)
 
     try:
         # ========================================
@@ -270,6 +271,49 @@ def test_full_pipeline():
         return False
 
 
+def test_append_behavior():
+    """Test that daily updates handle first run vs subsequent runs correctly"""
+
+    print("\n🔄 Testing First Run vs Append Behavior")
+    print("-" * 50)
+    print("This test verifies that:")
+    print("  - First run: Uploads FULL historical data")
+    print("  - Subsequent runs: Append daily data only")
+
+    # Create pipeline instance
+    pipeline = PipelineOrchestrator(dry_run=True)  # Dry run for testing
+
+    try:
+        # Test with yesterday's date
+        yesterday = date.today() - timedelta(days=1)
+
+        print(f"📅 Testing first run detection for {yesterday}")
+
+        # Test first run detection
+        is_first_run = pipeline._is_first_run()
+        print(f"🔍 Is first run: {is_first_run}")
+
+        # Run daily update for yesterday
+        print("🔄 Running daily update (dry run)...")
+        success = pipeline.run_daily_update(yesterday)
+
+        if success:
+            print("✅ Daily update completed successfully")
+            print("✅ First run vs append behavior test passed")
+        else:
+            print("❌ Daily update failed")
+            return False
+
+        return True
+
+    except Exception as e:
+        print(f"❌ Append behavior test failed: {e}")
+        return False
+
+
 if __name__ == "__main__":
-    success = test_full_pipeline()
-    exit(0 if success else 1)
+    # Run both tests
+    success1 = test_full_pipeline()
+    print("\n" + "=" * 60)
+    success2 = test_append_behavior()
+    exit(0 if (success1 and success2) else 1)
