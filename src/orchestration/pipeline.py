@@ -312,29 +312,39 @@ class PipelineOrchestrator:
 
     def _is_first_run(self) -> bool:
         """
-        Check if this is the first run (table doesn't exist or is empty)
+        Check if table is empty (first run) or has data (subsequent run)
 
         Returns:
             bool: True if this is the first run
         """
         try:
-            # Try to get table info
-            url = f"{self.dune_uploader.base_url}/table/{self.dune_uploader.namespace}/{self.dune_uploader.facts_table}"
-            response = self.dune_uploader.session.get(url)
+            # Try to query the table to see if it has data
+            # Use a simple query that won't return much data
+            query_url = f"{self.dune_uploader.base_url}/query"
+            query_data = {
+                "query_sql": f"SELECT COUNT(*) as row_count FROM {self.dune_uploader.namespace}.{self.dune_uploader.facts_table} LIMIT 1"
+            }
 
-            if response.status_code == 404:
-                logger.info("Table doesn't exist yet - this is the first run")
+            response = self.dune_uploader.session.post(query_url, json=query_data)
+
+            if response.status_code == 200:
+                result = response.json()
+                row_count = result.get("result", {}).get("rows", [[0]])[0][0]
+
+                if row_count > 0:
+                    logger.info(f"Table has {row_count} rows - subsequent run")
+                    return False
+                else:
+                    logger.info("Table is empty - first run")
+                    return True
+            else:
+                logger.info(
+                    f"Query failed with status {response.status_code} - assuming first run"
+                )
                 return True
 
-            # If table exists, check if it's empty by trying to get row count
-            # For now, we'll be conservative and assume it's not the first run
-            # In production, you'd want to query the actual row count
-            logger.info("Table exists - assuming this is not the first run")
-            return False
-
         except Exception as e:
-            logger.warning(f"Could not check if this is first run: {e}")
-            # If we can't check, assume it's the first run to be safe
+            logger.info(f"Cannot check table state: {e} - assuming first run")
             return True
 
     def get_pipeline_status(self) -> dict:

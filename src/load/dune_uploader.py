@@ -209,6 +209,36 @@ class DuneUploader:
         # Upload data
         return self._upload_data_to_table(data)
 
+    def _upload_data_to_table_append(self, data: List[Dict[str, Any]]) -> bool:
+        """
+        Upload data to facts table without clearing (for appending)
+
+        Args:
+            data: List of records to upload
+
+        Returns:
+            bool: True if successful
+        """
+        logger.info(f"Appending {len(data)} rows to facts table")
+
+        url = f"{self.base_url}/table/{self.namespace}/{self.facts_table}/insert"
+
+        # Prepare data for Dune (convert lists to JSON strings)
+        prepared_data = self._prepare_data_for_dune(data)
+
+        try:
+            response = self.session.post(url, json=prepared_data)
+            response.raise_for_status()
+
+            logger.info(
+                f"✅ Successfully appended {len(data)} rows to {self.facts_table}"
+            )
+            return True
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Failed to append data to {self.facts_table}: {e}")
+            raise
+
     def append_daily_facts(self, facts_df: pl.DataFrame, target_date: date) -> bool:
         """
         Append daily facts data (check for duplicates + append new data)
@@ -236,9 +266,9 @@ class DuneUploader:
             logger.info(f"Data for {target_date} already exists, skipping append")
             return True
 
-        # Append new data for target date
+        # Append new data for target date (don't clear table)
         data = daily_data.to_dicts()
-        return self._upload_data_to_table(data)
+        return self._upload_data_to_table_append(data)
 
     def _data_exists_for_date(self, target_date: date) -> bool:
         """
