@@ -262,8 +262,9 @@ class PipelineOrchestrator:
             )
 
             # Create historical facts (join TVL + dimensions)
+            # For initial load, don't filter by date - we want ALL historical data
             historical_facts_df = create_historical_facts(
-                raw_tvl_df, filtered_dimensions_df, target_date
+                raw_tvl_df, filtered_dimensions_df, None
             )
 
             logger.info(
