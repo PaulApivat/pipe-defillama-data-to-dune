@@ -186,18 +186,25 @@ class DuneUploader:
 
         url = f"{self.base_url}/table/{self.namespace}/{self.facts_table}/insert"
 
-        try:
-            response = self.session.post(url, json=data)
-            response.raise_for_status()
+        # Convert to NDJSON format, handling binary data
+        processed_data = []
+        for row in data:
+            processed_row = row.copy()
+            # Convert binary pool_id to hex for JSON serialization
+            if "pool_id" in processed_row and isinstance(
+                processed_row["pool_id"], bytes
+            ):
+                processed_row["pool_id"] = "0x" + processed_row["pool_id"].hex()
+            processed_data.append(processed_row)
 
-            logger.info(
-                f"✅ Successfully appended {len(data)} rows to {self.facts_table}"
-            )
-            return True
+        ndjson_data = "\n".join(
+            json.dumps(row, cls=DateTimeEncoder) for row in processed_data
+        )
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Failed to append data to {self.facts_table}: {e}")
-            raise
+        headers = {
+            "X-DUNE-API-KEY": self.api_key,
+            "Content-Type": "application/x-ndjson",
+        }
 
     def append_daily_facts(self, facts_df: pl.DataFrame, target_date: date) -> bool:
         """
@@ -377,8 +384,20 @@ class DuneUploader:
 
         url = f"{self.base_url}/table/{self.namespace}/{self.facts_table}/insert"
 
-        # Convert to NDJSON format
-        ndjson_data = "\n".join(json.dumps(row, cls=DateTimeEncoder) for row in data)
+        # Convert to NDJSON format, handling binary data
+        processed_data = []
+        for row in data:
+            processed_row = row.copy()
+            # Convert binary pool_id to hex for JSON serialization
+            if "pool_id" in processed_row and isinstance(
+                processed_row["pool_id"], bytes
+            ):
+                processed_row["pool_id"] = "0x" + processed_row["pool_id"].hex()
+            processed_data.append(processed_row)
+
+        ndjson_data = "\n".join(
+            json.dumps(row, cls=DateTimeEncoder) for row in processed_data
+        )
 
         headers = {
             "X-DUNE-API-KEY": self.api_key,

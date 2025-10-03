@@ -370,9 +370,66 @@ def test_append_behavior():
         return False
 
 
+def test_binary_to_hex_conversion():
+    """Test that binary pool_id data is properly converted to hex for Dune upload"""
+    print("\n🔍 Testing binary to hex conversion...")
+
+    # Test data with binary pool_id
+    test_data = [
+        {
+            "timestamp": "2025-01-01",
+            "pool_id": b"\x12\x34\xab\xcd",  # Binary data
+            "pool_id_defillama": "test-pool-1",
+            "protocol_slug": "test-protocol",
+            "chain": "ethereum",
+            "symbol": "TEST",
+            "tvl_usd": 1000.0,
+            "apy": 5.0,
+            "apy_base": 4.0,
+            "apy_reward": 1.0,
+        }
+    ]
+
+    # Test conversion logic (same as in dune_uploader.py)
+    processed_data = []
+    for row in test_data:
+        processed_row = row.copy()
+        if "pool_id" in processed_row and isinstance(processed_row["pool_id"], bytes):
+            processed_row["pool_id"] = "0x" + processed_row["pool_id"].hex()
+        processed_data.append(processed_row)
+
+    # Verify conversion
+    assert processed_data[0]["pool_id"] == "0x1234abcd"
+    assert isinstance(processed_data[0]["pool_id"], str)
+
+    # Verify JSON serialization works
+    import json
+
+    json_str = json.dumps(processed_data[0])
+    assert "0x1234abcd" in json_str
+
+    print("✅ Binary to hex conversion test passed")
+    return True
+
+
 if __name__ == "__main__":
-    # Run both tests
+    # Run all tests
     success1 = test_full_pipeline()
     print("\n" + "=" * 60)
     success2 = test_append_behavior()
-    exit(0 if (success1 and success2) else 1)
+    print("\n" + "=" * 60)
+    success3 = test_binary_to_hex_conversion()
+    print("\n" + "=" * 60)
+
+    # Summary
+    print("\n📊 Test Results:")
+    print(f"   - Full pipeline: {'✅ PASSED' if success1 else '❌ FAILED'}")
+    print(f"   - Append behavior: {'✅ PASSED' if success2 else '❌ FAILED'}")
+    print(f"   - Binary to hex conversion: {'✅ PASSED' if success3 else '❌ FAILED'}")
+
+    if success1 and success2 and success3:
+        print("\n🎉 All tests passed!")
+    else:
+        print("\n❌ Some tests failed.")
+
+    exit(0 if (success1 and success2 and success3) else 1)

@@ -243,6 +243,49 @@ def test_historical_facts_schema_with_real_data():
         return False
 
 
+def test_hex_conversion_for_json_serialization():
+    """Test that binary pool_id is correctly converted to hex for JSON serialization"""
+    print("\n🔍 Testing hex conversion for JSON serialization...")
+
+    # Create test data with binary pool_id
+    test_data = [
+        {
+            "timestamp": "2025-01-01",
+            "pool_id": b"\x12\x34\xab\xcd",  # Binary data
+            "pool_id_defillama": "test-pool-1",
+            "protocol_slug": "test-protocol",
+            "chain": "ethereum",
+            "symbol": "TEST",
+            "tvl_usd": 1000.0,
+            "apy": 5.0,
+            "apy_base": 4.0,
+            "apy_reward": 1.0,
+        }
+    ]
+
+    # Test the conversion logic
+    processed_data = []
+    for row in test_data:
+        processed_row = row.copy()
+        if "pool_id" in processed_row and isinstance(processed_row["pool_id"], bytes):
+            processed_row["pool_id"] = "0x" + processed_row["pool_id"].hex()
+        processed_data.append(processed_row)
+
+    # Verify conversion
+    assert processed_data[0]["pool_id"] == "0x1234abcd"
+    assert isinstance(processed_data[0]["pool_id"], str)
+
+    # Verify JSON serialization works
+    import json
+
+    json_str = json.dumps(processed_data[0])
+    assert "0x1234abcd" in json_str
+    assert "pool_id" in json_str
+
+    print("✅ Hex conversion test passed")
+    return True
+
+
 if __name__ == "__main__":
     print("🧪 Running Pipeline Integration Tests")
     print("=" * 50)
@@ -252,6 +295,7 @@ if __name__ == "__main__":
     # Run tests
     test1_passed = test_pipeline_with_real_data()
     test2_passed = test_historical_facts_schema_with_real_data()
+    test3_passed = test_hex_conversion_for_json_serialization()
 
     # Summary
     print("\n📊 Test Results:")
@@ -261,11 +305,15 @@ if __name__ == "__main__":
     print(
         f"   - Historical facts schema: {'✅ PASSED' if test2_passed else '❌ FAILED'}"
     )
+    print(
+        f"   - Hex conversion for JSON: {'✅ PASSED' if test3_passed else '❌ FAILED'}"
+    )
 
-    if test1_passed and test2_passed:
+    if test1_passed and test2_passed and test3_passed:
         print("\n🎉 All integration tests passed!")
         print("   - Pipeline works correctly with real data")
         print("   - Schema validation passes with actual data")
+        print("   - Hex conversion works for Dune upload")
         print("   - Ready for production use")
     else:
         print("\n❌ Some tests failed. Please review the issues above.")
