@@ -1,5 +1,6 @@
 name: DeFiLlama Initial Load
 
+# Test mode workflow for safe testing
 on:
   workflow_dispatch:  # Manual trigger only
   # No cron schedule - this runs once
