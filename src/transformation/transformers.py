@@ -120,14 +120,16 @@ def create_historical_facts(
             )
             SELECT
                 t.date as timestamp 
-                , CASE 
-                    WHEN SPLIT_PART(d.pool_old, '-', 1) LIKE '0x%' 
-                    THEN SPLIT_PART(d.pool_old, '-', 1)
-                    WHEN SPLIT_PART(d.pool_old, '-', 2) LIKE '0x%' 
-                    THEN SPLIT_PART(d.pool_old, '-', 2)
-                    ELSE d.pool_old
-                  END as pool_old_clean
-                , t.pool_id 
+                , CAST(
+                    CASE 
+                        WHEN SPLIT_PART(d.pool_old, '-', 1) LIKE '0x%' 
+                        THEN SPLIT_PART(d.pool_old, '-', 1)
+                        WHEN SPLIT_PART(d.pool_old, '-', 2) LIKE '0x%' 
+                        THEN SPLIT_PART(d.pool_old, '-', 2)
+                        ELSE d.pool_old
+                      END as BLOB
+                  ) as pool_id
+                , t.pool_id as pool_id_defillama
                 , d.protocol_slug 
                 , d.chain
                 , d.symbol
@@ -256,7 +258,7 @@ def get_summary_stats(df: pl.DataFrame, data_type: str) -> Dict[str, Any]:
     elif data_type == "historical_facts":
         stats = {
             "total_records": df.height,
-            "unique_pools": df.select("pool_id").n_unique(),
+            "unique_pools": df.select("pool_id_defillama").n_unique(),
             "date_range": f"{df.select('timestamp').min().item()} to {df.select('timestamp').max().item()}",
             "tvl_usd_sum": df.select("tvl_usd").sum().item(),
             "apy_mean": df.select("apy").mean().item(),
@@ -354,13 +356,13 @@ def main():
         # Step 2: Filter by target projects
         logger.info("🔄 Step 2: Filtering by target projects...")
         target_projects = {
-            "curve-dex",
-            "pancakeswap-amm",
+            # "curve-dex",
+            # "pancakeswap-amm",
             "pancakeswap-amm-v3",
             "aerodrome-slipstream",
-            "aerodrome-v1",
-            "uniswap-v2",
-            "uniswap-v3",
+            # "aerodrome-v1",
+            # "uniswap-v2",
+            # "uniswap-v3",
             "fluid-dex",
         }
         filtered_dimensions_df = filter_pools_by_projects(

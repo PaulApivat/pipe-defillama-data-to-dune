@@ -78,13 +78,13 @@ def test_transform_layer():
         # Test 2: Filter by projects
         print("\n2️⃣ Testing filter_pools_by_projects()...")
         target_projects = {
-            "curve-dex",
-            "pancakeswap-amm",
+            # "curve-dex",
+            # "pancakeswap-amm",
             "pancakeswap-amm-v3",
             "aerodrome-slipstream",
-            "aerodrome-v1",
-            "uniswap-v2",
-            "uniswap-v3",
+            # "aerodrome-v1",
+            # "uniswap-v2",
+            # "uniswap-v3",
             "fluid-dex",
         }
         filtered_dimensions_df = filter_pools_by_projects(
@@ -98,6 +98,67 @@ def test_transform_layer():
             raw_tvl_df, filtered_dimensions_df
         )
         print(f"✅ Created {historical_facts_df.height} historical facts records")
+
+        # Test 3.1: Verify schema changes (column names and data types)
+        print("\n3️⃣.1 Testing schema validation...")
+        from src.transformation.schemas import HISTORICAL_FACTS_SCHEMA
+
+        # Check if schema matches exactly
+        if historical_facts_df.schema == HISTORICAL_FACTS_SCHEMA:
+            print("✅ Historical facts schema matches HISTORICAL_FACTS_SCHEMA exactly")
+        else:
+            print("❌ Historical facts schema mismatch detected")
+            print(f"   Expected: {HISTORICAL_FACTS_SCHEMA}")
+            print(f"   Got:      {historical_facts_df.schema}")
+            return False
+
+        # Verify specific column names exist
+        expected_columns = [
+            "timestamp",
+            "pool_id",
+            "pool_id_defillama",
+            "protocol_slug",
+            "chain",
+            "symbol",
+            "tvl_usd",
+            "apy",
+            "apy_base",
+            "apy_reward",
+        ]
+        actual_columns = historical_facts_df.columns
+
+        if set(expected_columns) == set(actual_columns):
+            print("✅ All expected columns present")
+        else:
+            print("❌ Column mismatch detected")
+            print(f"   Expected: {expected_columns}")
+            print(f"   Got:      {actual_columns}")
+            return False
+
+        # Verify data types
+        schema_dict = dict(historical_facts_df.schema)
+
+        # Check pool_id is Binary (varbinary)
+        if schema_dict.get("pool_id") == pl.Binary():
+            print("✅ pool_id column is Binary type (varbinary)")
+        else:
+            print(
+                f"❌ pool_id column type mismatch: expected Binary, got {schema_dict.get('pool_id')}"
+            )
+            return False
+
+        # Check pool_id_defillama is String
+        if schema_dict.get("pool_id_defillama") == pl.String():
+            print("✅ pool_id_defillama column is String type")
+        else:
+            print(
+                f"❌ pool_id_defillama column type mismatch: expected String, got {schema_dict.get('pool_id_defillama')}"
+            )
+            return False
+
+        # Show sample data to verify content
+        print("\n📊 Sample historical facts data:")
+        print(historical_facts_df.head(3))
 
         # Test 4: Save only the actual transformations
         print("\n4️⃣ Testing data persistence...")

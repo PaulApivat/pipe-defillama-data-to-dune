@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 
 # Target projects for filtering
 TARGET_PROJECTS = {
-    "curve-dex",
-    "pancakeswap-amm",
+    # "curve-dex",
+    # "pancakeswap-amm",
     "pancakeswap-amm-v3",
     "aerodrome-slipstream",
-    "aerodrome-v1",
-    "uniswap-v2",
-    "uniswap-v3",
+    # "aerodrome-v1",
+    # "uniswap-v2",
+    # "uniswap-v3",
     "fluid-dex",
 }
 

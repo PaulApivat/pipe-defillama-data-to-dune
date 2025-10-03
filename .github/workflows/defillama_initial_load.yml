@@ -1,12 +1,11 @@
-name: DeFiLlama Daily Pipeline
+name: DeFiLlama Initial Load
 
 on:
-  schedule:
-    - cron: "0 6 * * *"  # Daily at 6 AM UTC
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:  # Manual trigger only
+  # No cron schedule - this runs once
 
 jobs:
-  run-daily-update:
+  run-initial-load:
     runs-on: ubuntu-latest
     
     steps:
@@ -23,19 +22,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Daily Update (TEST MODE)
+      - name: Run Initial Load (TEST MODE)
         env:
           DUNE_API_KEY: ${{ secrets.DUNE_API_KEY }}
         run: |
-          echo "🚀 Starting DeFiLlama Daily Pipeline (TEST MODE) at $(date)"
+          echo "🚀 Starting DeFiLlama Initial Load (TEST MODE) at $(date)"
           echo "🧪 Using test table: dune.uniswap_fnd.test_run_defillama_historical_facts"
-          python -m src.orchestration.pipeline --mode daily --verbose --test-mode
-          echo "✅ Daily pipeline completed at $(date)"
+          python -m src.orchestration.pipeline --mode initial --verbose --test-mode
+          echo "✅ Initial load completed at $(date)"
 
       - name: Upload logs and metrics
         uses: actions/upload-artifact@v4
         with:
-          name: daily-pipeline-logs-${{ github.run_number }}
+          name: initial-load-logs-${{ github.run_number }}
           path: |
             output/
             *.log
@@ -44,10 +43,10 @@ jobs:
       - name: Pipeline Summary
         if: always()
         run: |
-          echo "📊 Daily Pipeline Summary for Run #${{ github.run_number }}"
+          echo "📊 Initial Load Summary for Run #${{ github.run_number }}"
           echo "⏰ Started: ${{ github.event.head_commit.timestamp }}"
           echo "🔄 Status: ${{ job.status }}"
-          echo "📁 Artifacts: daily-pipeline-logs-${{ github.run_number }}"
+          echo "📁 Artifacts: initial-load-logs-${{ github.run_number }}"
 
       - name: Notify Success
         if: success()
@@ -57,11 +56,11 @@ jobs:
           server_port: 587
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "✅ DeFiLlama Daily Pipeline Success - Run #${{ github.run_number }}"
+          subject: "✅ DeFiLlama Initial Load Success - Run #${{ github.run_number }}"
           to: ${{ secrets.NOTIFICATION_EMAIL }}
           from: ${{ secrets.EMAIL_USERNAME }}
           body: |
-            🎉 DeFiLlama Daily Pipeline completed successfully!
+            🎉 DeFiLlama Initial Load completed successfully!
             
             📊 Run Details:
             - Run Number: #${{ github.run_number }}
@@ -81,11 +80,11 @@ jobs:
           server_port: 587
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "❌ DeFiLlama Daily Pipeline Failed - Run #${{ github.run_number }}"
+          subject: "❌ DeFiLlama Initial Load Failed - Run #${{ github.run_number }}"
           to: ${{ secrets.NOTIFICATION_EMAIL }}
           from: ${{ secrets.EMAIL_USERNAME }}
           body: |
-            🚨 DeFiLlama Daily Pipeline failed!
+            🚨 DeFiLlama Initial Load failed!
             
             📊 Run Details:
             - Run Number: #${{ github.run_number }}

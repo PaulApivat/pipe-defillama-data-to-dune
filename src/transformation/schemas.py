@@ -28,8 +28,8 @@ POOL_DIM_SCHEMA = pl.Schema(
 HISTORICAL_FACTS_SCHEMA = pl.Schema(
     [
         ("timestamp", pl.Date()),
-        ("pool_old_clean", pl.String()),
-        ("pool_id", pl.String()),
+        ("pool_id", pl.Binary()),
+        ("pool_id_defillama", pl.String()),
         ("protocol_slug", pl.String()),
         ("chain", pl.String()),
         ("symbol", pl.String()),
