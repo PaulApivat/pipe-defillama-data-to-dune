@@ -120,15 +120,13 @@ def create_historical_facts(
             )
             SELECT
                 t.date as timestamp 
-                , CAST(
-                    CASE 
-                        WHEN SPLIT_PART(d.pool_old, '-', 1) LIKE '0x%' 
-                        THEN SPLIT_PART(d.pool_old, '-', 1)
-                        WHEN SPLIT_PART(d.pool_old, '-', 2) LIKE '0x%' 
-                        THEN SPLIT_PART(d.pool_old, '-', 2)
-                        ELSE d.pool_old
-                      END as BLOB
-                  ) as pool_id
+                , CASE 
+                    WHEN SPLIT_PART(d.pool_old, '-', 1) LIKE '0x%' 
+                    THEN SPLIT_PART(d.pool_old, '-', 1)
+                    WHEN SPLIT_PART(d.pool_old, '-', 2) LIKE '0x%' 
+                    THEN SPLIT_PART(d.pool_old, '-', 2)
+                    ELSE d.pool_old
+                  END as pool_id
                 , t.pool_id as pool_id_defillama
                 , d.protocol_slug 
                 , d.chain
@@ -147,6 +145,22 @@ def create_historical_facts(
 
         # Close connection
         conn.close()
+
+        # Convert hex string to actual binary data
+        def hex_string_to_binary(hex_string: str) -> bytes:
+            """Convert hex string to binary data"""
+            if hex_string.startswith("0x"):
+                hex_string = hex_string[2:]  # Remove 0x prefix
+            return bytes.fromhex(hex_string)
+
+        # Apply binary conversion to pool_id column
+        result_df = result_df.with_columns(
+            [
+                pl.col("pool_id").map_elements(
+                    hex_string_to_binary, return_dtype=pl.Binary()
+                )
+            ]
+        )
 
         # Validate schema
         if result_df.schema != HISTORICAL_FACTS_SCHEMA:

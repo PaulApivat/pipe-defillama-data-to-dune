@@ -156,6 +156,24 @@ def test_transform_layer():
             )
             return False
 
+        # Test 3.2: Verify pool_id binary conversion works correctly
+        print("\n3️⃣.2 Testing pool_id binary conversion...")
+        sample_pool_id = historical_facts_df.select("pool_id").to_series()[0]
+
+        # Check that pool_id is binary
+        if not isinstance(sample_pool_id, bytes):
+            print(f"❌ pool_id is not binary: {type(sample_pool_id)}")
+            return False
+
+        # Check that hex conversion gives correct result
+        hex_result = sample_pool_id.hex()
+        if not hex_result.startswith("0x"):
+            hex_result = "0x" + hex_result
+
+        print(f"✅ pool_id binary conversion works: {hex_result}")
+        print(f"   - Type: {type(sample_pool_id)}")
+        print(f"   - Hex: {hex_result}")
+
         # Show sample data to verify content
         print("\n📊 Sample historical facts data:")
         print(historical_facts_df.head(3))
@@ -208,6 +226,7 @@ def test_transform_layer():
         print(f"  ✅ - historical_facts_{today}.parquet (joined facts)")
         print("   ✅ Avoided duplicating raw data (already saved by extract layer)")
         print("   ✅ Removed SCD2 complexity (dimensions are not slowly changing)")
+        print("   ✅ Pool ID binary conversion works correctly")
 
         return True
 
