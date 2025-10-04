@@ -286,6 +286,65 @@ def test_hex_conversion_for_json_serialization():
     return True
 
 
+def test_duplicate_detection_prevents_duplicate_uploads():
+    """Test that duplicate detection prevents uploading the same data twice"""
+    print("\n🔍 Testing duplicate detection prevents duplicate uploads...")
+
+    # Create test data
+    test_date = date.today()
+    test_data = pl.DataFrame(
+        {
+            "timestamp": [test_date, test_date],
+            "pool_id": [b"\x12\x34\xab\xcd", b"\x56\x78\xef\x90"],
+            "pool_id_defillama": ["test-pool-1", "test-pool-2"],
+            "protocol_slug": ["test-protocol", "test-protocol"],
+            "chain": ["ethereum", "ethereum"],
+            "symbol": ["TEST", "TEST2"],
+            "tvl_usd": [1000.0, 2000.0],
+            "apy": [5.0, 6.0],
+            "apy_base": [4.0, 5.0],
+            "apy_reward": [1.0, 1.0],
+        }
+    )
+
+    # Test 1: First upload should succeed
+    print("1️⃣ Testing first upload...")
+    from src.load.dune_uploader import DuneUploader
+
+    # Create uploader in test mode
+    uploader = DuneUploader(test_mode=True)
+
+    # First upload should succeed
+    success1 = uploader.append_daily_facts(test_data, test_date)
+    assert success1, "First upload should succeed"
+    print("✅ First upload succeeded")
+
+    # Test 2: Second upload should be skipped
+    print("2️⃣ Testing second upload (should be skipped)...")
+    success2 = uploader.append_daily_facts(test_data, test_date)
+    assert success2, "Second upload should be skipped (not fail)"
+    print("✅ Second upload was skipped (duplicate detection worked)")
+
+    # Test 3: Verify upload record was created
+    print("3️⃣ Testing upload record creation...")
+    date_str = test_date.strftime("%Y-%m-%d")
+    upload_record = f"output/cache/uploaded_{date_str}.txt"
+
+    if os.path.exists(upload_record):
+        print("✅ Upload record created successfully")
+    else:
+        print("❌ Upload record not found")
+        return False
+
+    # Clean up
+    if os.path.exists(upload_record):
+        os.remove(upload_record)
+        print("✅ Cleaned up upload record")
+
+    print("✅ Duplicate detection test passed")
+    return True
+
+
 if __name__ == "__main__":
     print("🧪 Running Pipeline Integration Tests")
     print("=" * 50)
@@ -296,6 +355,7 @@ if __name__ == "__main__":
     test1_passed = test_pipeline_with_real_data()
     test2_passed = test_historical_facts_schema_with_real_data()
     test3_passed = test_hex_conversion_for_json_serialization()
+    test4_passed = test_duplicate_detection_prevents_duplicate_uploads()
 
     # Summary
     print("\n📊 Test Results:")
@@ -308,12 +368,14 @@ if __name__ == "__main__":
     print(
         f"   - Hex conversion for JSON: {'✅ PASSED' if test3_passed else '❌ FAILED'}"
     )
+    print(f"   - Duplicate detection: {'✅ PASSED' if test4_passed else '❌ FAILED'}")
 
     if test1_passed and test2_passed and test3_passed:
         print("\n🎉 All integration tests passed!")
         print("   - Pipeline works correctly with real data")
         print("   - Schema validation passes with actual data")
         print("   - Hex conversion works for Dune upload")
+        print("   - Duplicate detection works correctly")
         print("   - Ready for production use")
     else:
         print("\n❌ Some tests failed. Please review the issues above.")

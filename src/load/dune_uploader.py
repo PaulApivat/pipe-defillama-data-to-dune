@@ -221,6 +221,24 @@ class DuneUploader:
             logger.error(f"❌ Response text: {response.text}")
             raise
 
+    def _create_upload_record(self, target_date: date, record_count: int) -> None:
+        """Create upload record for successful upload"""
+        try:
+            # Ensure cache directory exists
+            os.makedirs("output/cache", exist_ok=True)
+
+            date_str = target_date.strftime("%Y-%m-%d")
+            upload_record = f"output/cache/uploaded_{date_str}.txt"
+
+            with open(upload_record, "w") as f:
+                f.write(
+                    f"Uploaded {record_count} records for {target_date} at {datetime.now()}"
+                )
+
+            logger.info(f"✅ Created upload record: {upload_record}")
+        except Exception as e:
+            logger.warning(f"Could not create upload record: {e}")
+
     def append_daily_facts(self, facts_df: pl.DataFrame, target_date: date) -> bool:
         """
         Append daily facts data with enhanced duplicate detection and error handling
@@ -265,6 +283,7 @@ class DuneUploader:
             success = self._upload_data_to_table_append(data)
 
             if success:
+                self._create_upload_record(target_date, daily_data.height)
                 logger.info(
                     f"✅ Successfully appended {daily_data.height} records for {target_date}"
                 )
@@ -311,15 +330,11 @@ class DuneUploader:
 
             # Check that all timestamps match target date
             unique_dates = daily_data.select("timestamp").unique().to_series().to_list()
-
-            # DEBUG: target_date format
-            logger.info(
-                f"DEBUG: target_date = {target_date} (type: {type(target_date)})"
-            )
-            logger.info(f"DEBUG: unique_dates = {unique_dates}")
-            logger.info(
-                f"DEBUG: unique_dates[0] = {unique_dates[0]} (type: {type(unique_dates[0])})"
-            )
+            if len(unique_dates) != 1 or unique_dates[0] != target_date:
+                logger.error(
+                    f"❌ Date mismatch: expected {target_date}, got {unique_dates}"
+                )
+                return False
 
             if len(unique_dates) != 1 or unique_dates[0] != target_date:
                 logger.error(
@@ -330,7 +345,10 @@ class DuneUploader:
             # Check for duplicate records
             duplicate_count = daily_data.height - daily_data.unique().height
             if duplicate_count > 0:
-                logger.warning(f"⚠️ Found {duplicate_count} duplicate records")
+                logger.error(
+                    f"❌ Found {duplicate_count} duplicate records - upload rejected"
+                )
+                return False
 
             logger.info(f"✅ Data quality validation passed for {target_date}")
             return True
@@ -341,7 +359,7 @@ class DuneUploader:
 
     def _data_exists_for_date(self, target_date: date) -> bool:
         """
-        Check if data already exists for a specific date
+        Check if data already exists for a specific date using upload record
 
         Args:
             target_date: Date to check
@@ -353,24 +371,22 @@ class DuneUploader:
         # In a more sophisticated implementation, you'd query Dune directly
         # For this fix, we'll assume data doesn't exist if we can't query
         try:
-            # Try to get table info - if it fails, table doesn't exist
-            url = f"{self.base_url}/table/{self.namespace}/{self.facts_table}"
-            response = self.session.get(url)
+            # Check if we have an upload record for this date
+            date_str = target_date.strftime("%Y-%m-%d")
+            upload_record = f"output/cache/uploaded_{date_str}.txt"
 
-            if response.status_code == 404:
-                logger.info(f"Table {self.facts_table} doesn't exist yet")
+            if os.path.exists(upload_record):
+                logger.info(
+                    f"✅ Upload record exists for {target_date} - data already uploaded"
+                )
+                return True
+            else:
+                logger.info(f"✅ No upload record for {target_date} - safe to upload")
                 return False
 
-            # For now, we'll be conservative and assume data might exist
-            # In production, you'd want to query the actual data
-            logger.info(
-                f"Table {self.facts_table} exists, assuming data might exist for {target_date}"
-            )
-            return False  # Conservative approach - always append
-
         except Exception as e:
-            logger.warning(f"Could not check if data exists for {target_date}: {e}")
-            return False  # If we can't check, assume it doesn't exist
+            logger.warning(f"Could not check for existing data: {e}")
+            return False
 
     def clear_table(self) -> bool:
         """
