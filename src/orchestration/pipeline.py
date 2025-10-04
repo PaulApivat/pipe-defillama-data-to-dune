@@ -22,9 +22,12 @@ from datetime import date, datetime, timedelta
 from typing import Optional, List
 import logging
 import polars as pl
+from dotenv import load_dotenv
 
 # Add src to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+load_dotenv()
 
 # Extract layer imports
 from src.extract.data_fetcher import (

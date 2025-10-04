@@ -206,6 +206,21 @@ class DuneUploader:
             "Content-Type": "application/x-ndjson",
         }
 
+        try:
+            response = self.session.post(url, data=ndjson_data, headers=headers)
+            response.raise_for_status()
+
+            logger.info(
+                f"✅ Successfully appended {len(data)} rows to {self.facts_table}"
+            )
+            return True
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Failed to append data to {self.facts_table}: {e}")
+            logger.error(f"❌ Response status: {response.status_code}")
+            logger.error(f"❌ Response text: {response.text}")
+            raise
+
     def append_daily_facts(self, facts_df: pl.DataFrame, target_date: date) -> bool:
         """
         Append daily facts data with enhanced duplicate detection and error handling
@@ -296,6 +311,16 @@ class DuneUploader:
 
             # Check that all timestamps match target date
             unique_dates = daily_data.select("timestamp").unique().to_series().to_list()
+
+            # DEBUG: target_date format
+            logger.info(
+                f"DEBUG: target_date = {target_date} (type: {type(target_date)})"
+            )
+            logger.info(f"DEBUG: unique_dates = {unique_dates}")
+            logger.info(
+                f"DEBUG: unique_dates[0] = {unique_dates[0]} (type: {type(unique_dates[0])})"
+            )
+
             if len(unique_dates) != 1 or unique_dates[0] != target_date:
                 logger.error(
                     f"❌ Date mismatch: expected {target_date}, got {unique_dates}"
