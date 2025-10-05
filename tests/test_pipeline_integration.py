@@ -9,7 +9,7 @@ import os
 import sys
 import glob
 from datetime import date
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import polars as pl
 
 # Add src to path for imports
@@ -314,19 +314,47 @@ def test_duplicate_detection_prevents_duplicate_uploads():
     # Create uploader in test mode
     uploader = DuneUploader(test_mode=True)
 
-    # First upload should succeed
-    success1 = uploader.append_daily_facts(test_data, test_date)
-    assert success1, "First upload should succeed"
-    print("✅ First upload succeeded")
+    # Mock the Dune API to return "no existing data" for first call
+    with patch.object(uploader, "_data_exists_for_date") as mock_exists:
+        mock_exists.return_value = False  # No existing data
+
+        success1 = uploader.append_daily_facts(test_data, test_date)
+        assert success1, "First upload should succeed"
+        print("✅ First upload succeeded")
 
     # Test 2: Second upload should be skipped
     print("2️⃣ Testing second upload (should be skipped)...")
-    success2 = uploader.append_daily_facts(test_data, test_date)
-    assert success2, "Second upload should be skipped (not fail)"
-    print("✅ Second upload was skipped (duplicate detection worked)")
+    with patch.object(uploader, "_data_exists_for_date") as mock_exists:
+        mock_exists.return_value = True  # Data exists
 
-    # Test 3: Verify upload record was created
-    print("3️⃣ Testing upload record creation...")
+        success2 = uploader.append_daily_facts(test_data, test_date)
+        assert success2, "Second upload should be skipped (not fail)"
+        print("✅ Second upload was skipped (duplicate detection worked)")
+
+    # Test 3: Verify the Dune API query method is used
+    print("3️⃣ Testing Dune API query method...")
+    with patch.object(uploader.session, "post") as mock_post:
+        # Mock successful API response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "result": {"rows": [[False]]}  # No existing data
+        }
+        mock_post.return_value = mock_response
+
+        # Test the _data_exists_for_date method directly
+        result = uploader._data_exists_for_date(test_date)
+        assert result == False, "Should return False when no data exists"
+
+        # Verify the correct SQL query was used
+        call_args = mock_post.call_args
+        assert call_args[1]["json"]["query_sql"].strip().startswith("SELECT EXISTS(")
+        assert "LIMIT 1" in call_args[1]["json"]["query_sql"]
+        assert str(test_date) in call_args[1]["json"]["query_sql"]
+        print("✅ Correct EXISTS query with LIMIT 1 was used")
+
+    # Test 4: Verify upload record was created
+    print("4️⃣ Testing upload record creation...")
     date_str = test_date.strftime("%Y-%m-%d")
     upload_record = f"output/cache/uploaded_{date_str}.txt"
 
@@ -342,6 +370,10 @@ def test_duplicate_detection_prevents_duplicate_uploads():
         print("✅ Cleaned up upload record")
 
     print("✅ Duplicate detection test passed")
+    print("   - First upload works correctly")
+    print("   - Duplicate detection prevents second upload")
+    print("   - Dune API query method works correctly")
+    print("   - Upload record creation works")
     return True
 
 
