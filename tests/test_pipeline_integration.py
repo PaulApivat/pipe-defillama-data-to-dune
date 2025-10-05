@@ -307,6 +307,13 @@ def test_duplicate_detection_prevents_duplicate_uploads():
         }
     )
 
+    # Clean up any existing upload records for this test date
+    date_str = test_date.strftime("%Y-%m-%d")
+    upload_record = f"output/cache/uploaded_{date_str}.txt"
+    if os.path.exists(upload_record):
+        os.remove(upload_record)
+        print("🧹 Cleaned up existing upload record before test")
+
     # Test 1: First upload should succeed
     print("1️⃣ Testing first upload...")
     from src.load.dune_uploader import DuneUploader
@@ -315,12 +322,19 @@ def test_duplicate_detection_prevents_duplicate_uploads():
     uploader = DuneUploader(test_mode=True)
 
     # Mock the Dune API to return "no existing data" for first call
-    with patch.object(uploader, "_data_exists_for_date") as mock_exists:
+    with patch.object(uploader, "_data_exists_for_date") as mock_exists, patch.object(
+        uploader, "_upload_data_to_table_append", return_value=True
+    ):
         mock_exists.return_value = False  # No existing data
 
         success1 = uploader.append_daily_facts(test_data, test_date)
         assert success1, "First upload should succeed"
         print("✅ First upload succeeded")
+
+    # Clean up any upload record that might have been created
+    if os.path.exists(upload_record):
+        os.remove(upload_record)
+        print("🧹 Cleaned up upload record from Test 1")
 
     # Test 2: Second upload should be skipped
     print("2️⃣ Testing second upload (should be skipped)...")
@@ -331,35 +345,55 @@ def test_duplicate_detection_prevents_duplicate_uploads():
         assert success2, "Second upload should be skipped (not fail)"
         print("✅ Second upload was skipped (duplicate detection worked)")
 
-    # Test 3: Verify the Dune API query method is used
-    print("3️⃣ Testing Dune API query method...")
-    with patch.object(uploader.session, "post") as mock_post:
-        # Mock successful API response
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "result": {"rows": [[False]]}  # No existing data
-        }
-        mock_post.return_value = mock_response
+    # Clean up any upload record that might have been created
+    if os.path.exists(upload_record):
+        os.remove(upload_record)
+        print("🧹 Cleaned up upload record from Test 2")
 
-        # Test the _data_exists_for_date method directly
-        result = uploader._data_exists_for_date(test_date)
-        assert result == False, "Should return False when no data exists"
+    # Test 3: Verify file-based duplicate detection works
+    print("3️⃣ Testing file-based duplicate detection...")
 
-        # Verify the correct SQL query was used
-        call_args = mock_post.call_args
-        assert call_args[1]["json"]["query_sql"].strip().startswith("SELECT EXISTS(")
-        assert "LIMIT 1" in call_args[1]["json"]["query_sql"]
-        assert str(test_date) in call_args[1]["json"]["query_sql"]
-        print("✅ Correct EXISTS query with LIMIT 1 was used")
+    # Debug: Check if file exists before testing
+    print(f"🔍 Checking for upload record: {upload_record}")
+    print(f"🔍 File exists: {os.path.exists(upload_record)}")
 
-    # Test 4: Verify upload record was created
+    # Test that no upload record exists initially
+    result = uploader._data_exists_for_date(test_date)
+    print(f"🔍 _data_exists_for_date returned: {result}")
+    assert result == False, "Should return False when no upload record exists"
+    print("✅ Correctly detected no existing data")
+
+    # Create upload record manually
+    with open(upload_record, "w") as f:
+        f.write(f"Test upload for {test_date}")
+
+    # Test that duplicate detection now finds the file
+    result = uploader._data_exists_for_date(test_date)
+    assert result == True, "Should return True when upload record exists"
+    print("✅ File-based duplicate detection works correctly")
+
+    # Clean up
+    if os.path.exists(upload_record):
+        os.remove(upload_record)
+        print("✅ Cleaned up test upload record")
+
+    # Test 4: Verify upload record creation works
     print("4️⃣ Testing upload record creation...")
-    date_str = test_date.strftime("%Y-%m-%d")
-    upload_record = f"output/cache/uploaded_{date_str}.txt"
+
+    # Create upload record using the uploader method
+    uploader._create_upload_record(test_date, 100)
+
+    # Verify file was created (reuse the same variables from Test 3)
 
     if os.path.exists(upload_record):
         print("✅ Upload record created successfully")
+
+        # Verify file content
+        with open(upload_record, "r") as f:
+            content = f.read()
+            assert "100" in content, "Should contain record count"
+            assert str(test_date) in content, "Should contain date"
+        print("✅ Upload record content is correct")
     else:
         print("❌ Upload record not found")
         return False
@@ -372,8 +406,144 @@ def test_duplicate_detection_prevents_duplicate_uploads():
     print("✅ Duplicate detection test passed")
     print("   - First upload works correctly")
     print("   - Duplicate detection prevents second upload")
-    print("   - Dune API query method works correctly")
+    print("   - File-based duplicate detection works correctly")
     print("   - Upload record creation works")
+    return True
+
+
+def test_file_based_duplicate_detection():
+    """Test that file-based duplicate detection works correctly"""
+    print("\n🔍 Testing file-based duplicate detection...")
+
+    from src.load.dune_uploader import DuneUploader
+    from datetime import date
+    import polars as pl
+
+    # Create test data
+    test_date = date(2025, 10, 5)
+    test_data = pl.DataFrame(
+        {
+            "timestamp": [test_date],
+            "pool_id": [b"\x12\x34\xab\xcd"],
+            "pool_id_defillama": ["test-pool-1"],
+            "protocol_slug": ["test-protocol"],
+            "chain": ["ethereum"],
+            "symbol": ["TEST"],
+            "tvl_usd": [1000.0],
+            "apy": [5.0],
+            "apy_base": [4.0],
+            "apy_reward": [1.0],
+        }
+    )
+
+    # Create uploader in test mode
+    uploader = DuneUploader(test_mode=True)
+
+    # Test 1: No upload record exists initially
+    print("1️⃣ Testing no upload record exists...")
+    result = uploader._data_exists_for_date(test_date)
+    assert result == False, "Should return False when no upload record exists"
+    print("✅ Correctly detected no existing data")
+
+    # Test 2: Create upload record manually
+    print("2️⃣ Testing upload record creation...")
+    uploader._create_upload_record(test_date, 100)
+
+    # Verify file was created
+    date_str = test_date.strftime("%Y-%m-%d")
+    upload_record = f"output/cache/uploaded_{date_str}.txt"
+    assert os.path.exists(upload_record), "Upload record file should exist"
+    print("✅ Upload record created successfully")
+
+    # Test 3: Check that duplicate detection now works
+    print("3️⃣ Testing duplicate detection with existing record...")
+    result = uploader._data_exists_for_date(test_date)
+    assert result == True, "Should return True when upload record exists"
+    print("✅ Correctly detected existing data")
+
+    # Test 4: Verify file content
+    print("4️⃣ Testing upload record content...")
+    with open(upload_record, "r") as f:
+        content = f.read()
+        assert "100" in content, "Should contain record count"
+        assert str(test_date) in content, "Should contain date"
+        assert "Uploaded" in content, "Should contain upload message"
+    print("✅ Upload record content is correct")
+
+    # Clean up
+    if os.path.exists(upload_record):
+        os.remove(upload_record)
+        print("✅ Cleaned up upload record")
+
+    print("✅ File-based duplicate detection test passed")
+    return True
+
+
+def test_upload_record_cleanup():
+    """Test that old upload records are cleaned up after 72 hours"""
+    print("\n🔍 Testing upload record cleanup...")
+
+    from src.orchestration.pipeline import PipelineOrchestrator
+    from datetime import date, datetime, timedelta
+    import os
+    import time
+
+    # Create orchestrator
+    orchestrator = PipelineOrchestrator(dry_run=True)
+
+    # Test 1: Create test upload records with different ages
+    print("1️⃣ Creating test upload records...")
+
+    # Ensure cache directory exists
+    os.makedirs("output/cache", exist_ok=True)
+
+    # Create recent record (should be kept)
+    recent_date = date.today()
+    recent_file = f"output/cache/uploaded_{recent_date.strftime('%Y-%m-%d')}.txt"
+    with open(recent_file, "w") as f:
+        f.write(f"Recent upload for {recent_date}")
+
+    # Create old record (should be cleaned up)
+    old_date = date.today() - timedelta(days=4)  # 4 days ago
+    old_file = f"output/cache/uploaded_{old_date.strftime('%Y-%m-%d')}.txt"
+    with open(old_file, "w") as f:
+        f.write(f"Old upload for {old_date}")
+
+    # Manually set old file modification time to 4 days ago
+    old_time = time.time() - (4 * 24 * 60 * 60)  # 4 days ago
+    os.utime(old_file, (old_time, old_time))
+
+    print("✅ Created test upload records")
+    print(f"   - Recent: {recent_file}")
+    print(f"   - Old: {old_file}")
+
+    # Test 2: Verify both files exist before cleanup
+    assert os.path.exists(recent_file), "Recent file should exist"
+    assert os.path.exists(old_file), "Old file should exist"
+    print("✅ Both files exist before cleanup")
+
+    # Test 3: Run cleanup
+    print("3️⃣ Running cleanup...")
+    orchestrator._cleanup_old_upload_records()
+    print("✅ Cleanup completed")
+
+    # Test 4: Verify cleanup results
+    print("4️⃣ Verifying cleanup results...")
+
+    # Recent file should still exist
+    assert os.path.exists(recent_file), "Recent file should still exist"
+    print("✅ Recent file preserved")
+
+    # Old file should be deleted
+    assert not os.path.exists(old_file), "Old file should be deleted"
+    print("✅ Old file cleaned up")
+
+    # Clean up remaining test file
+    if os.path.exists(recent_file):
+        os.remove(recent_file)
+        print("✅ Cleaned up test files")
+
+    print("✅ Upload record cleanup test passed")
     return True
 
 
@@ -388,6 +558,8 @@ if __name__ == "__main__":
     test2_passed = test_historical_facts_schema_with_real_data()
     test3_passed = test_hex_conversion_for_json_serialization()
     test4_passed = test_duplicate_detection_prevents_duplicate_uploads()
+    test5_passed = test_file_based_duplicate_detection()
+    test6_passed = test_upload_record_cleanup()
 
     # Summary
     print("\n📊 Test Results:")
@@ -401,13 +573,26 @@ if __name__ == "__main__":
         f"   - Hex conversion for JSON: {'✅ PASSED' if test3_passed else '❌ FAILED'}"
     )
     print(f"   - Duplicate detection: {'✅ PASSED' if test4_passed else '❌ FAILED'}")
+    print(
+        f"   - File-based duplicate detection: {'✅ PASSED' if test5_passed else '❌ FAILED'}"
+    )
+    print(f"   - Upload record cleanup: {'✅ PASSED' if test6_passed else '❌ FAILED'}")
 
-    if test1_passed and test2_passed and test3_passed:
+    if (
+        test1_passed
+        and test2_passed
+        and test3_passed
+        and test4_passed
+        and test5_passed
+        and test6_passed
+    ):
         print("\n🎉 All integration tests passed!")
         print("   - Pipeline works correctly with real data")
         print("   - Schema validation passes with actual data")
         print("   - Hex conversion works for Dune upload")
         print("   - Duplicate detection works correctly")
+        print("   - File-based duplicate detection works")
+        print("   - Upload record cleanup works")
         print("   - Ready for production use")
     else:
         print("\n❌ Some tests failed. Please review the issues above.")

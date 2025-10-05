@@ -222,12 +222,52 @@ class PipelineOrchestrator:
                 os.remove(temp_file)
                 logger.info(f"✅ Cleaned up {temp_file}")
 
+            # Clean up old upload records (older than 48 hours)
+            self._cleanup_old_upload_records()
+
             logger.info(f"✅ Daily update completed successfully for {target_date}!")
             return True
 
         except Exception as e:
             logger.error(f"❌ Daily update failed: {e}")
             raise
+
+    def _cleanup_old_upload_records(self) -> None:
+        """
+        Clean up upload record files older than 72 hours to prevent storage bloat
+
+        This keeps the file-based duplicate detection working while managing storage.
+        72 hours covers weekend gaps (Friday 6 AM → Monday 6 AM = 66 hours).
+        """
+        try:
+            import glob
+            from datetime import timedelta
+
+            # Get all upload record files
+            upload_files = glob.glob("output/cache/uploaded_*.txt")
+            cutoff_time = datetime.now() - timedelta(hours=72)
+
+            cleaned_count = 0
+            for file_path in upload_files:
+                try:
+                    # Get file modification time
+                    file_mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
+
+                    if file_mtime < cutoff_time:
+                        os.remove(file_path)
+                        cleaned_count += 1
+                        logger.info(f"🧹 Cleaned up old upload record: {file_path}")
+
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not clean up {file_path}: {e}")
+
+            if cleaned_count > 0:
+                logger.info(f"✅ Cleaned up {cleaned_count} old upload records")
+            else:
+                logger.info("✅ No old upload records to clean up")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Could not clean up old upload records: {e}")
 
     def get_pipeline_status(self) -> dict:
         """

@@ -353,7 +353,7 @@ class DuneUploader:
 
     def _data_exists_for_date(self, target_date: date) -> bool:
         """
-        Check if data already exists for a specific date using Dune API
+        Check if data already exists for a specific date using file-based tracking
 
         Args:
             target_date: Date to check
@@ -361,68 +361,23 @@ class DuneUploader:
         Returns:
             bool: True if data exists for this date
         """
-        max_retries = 3
-        retry_delay = 5  # seconds
+        try:
+            # Check for upload record file
+            date_str = target_date.strftime("%Y-%m-%d")
+            upload_record = f"output/cache/uploaded_{date_str}.txt"
 
-        for attempt in range(max_retries):
-            try:
-                # Use EXISTS for better performance
-                query_sql = f"""
-                SELECT EXISTS(
-                    SELECT 1 
-                    FROM {self.namespace}.{self.facts_table}
-                    WHERE timestamp = '{target_date}'
-                    LIMIT 1
-                ) as data_exists
-                """
+            if os.path.exists(upload_record):
+                logger.info(
+                    f"✅ Found upload record for {target_date}: {upload_record}"
+                )
+                return True
+            else:
+                logger.info(f"✅ No upload record found for {target_date}")
+                return False
 
-                url = f"{self.base_url}/query/execute"
-                payload = {"query_sql": query_sql, "parameters": {}}
-
-                response = self.session.post(url, json=payload)
-
-                if response.status_code == 200:
-                    result = response.json()
-                    data_exists = result.get("result", {}).get("rows", [[False]])[0][0]
-
-                    if data_exists:
-                        logger.info(f"✅ Data exists for {target_date} in Dune")
-                        return True
-                    else:
-                        logger.info(f"✅ No data found for {target_date} in Dune")
-                        return False
-                else:
-                    logger.warning(
-                        f"⚠️ Dune API returned {response.status_code} for {target_date}"
-                    )
-                    if attempt < max_retries - 1:
-                        logger.info(
-                            f"🔄 Retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})"
-                        )
-                        time.sleep(retry_delay)
-                        continue
-                    else:
-                        logger.error(
-                            f"❌ CRITICAL: Dune API failed after {max_retries} attempts"
-                        )
-                        raise Exception(
-                            f"Could not verify duplicate status for {target_date}"
-                        )
-
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    logger.warning(f"⚠️ Attempt {attempt + 1} failed: {e}")
-                    logger.info(f"🔄 Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-                else:
-                    logger.error(
-                        f"❌ CRITICAL: Could not check for existing data after {max_retries} attempts: {e}"
-                    )
-                    raise Exception(
-                        f"Duplicate detection failed for {target_date}: {e}"
-                    )
-
-        return False  # This line should never be reached
+        except Exception as e:
+            logger.warning(f"⚠️ Could not check for existing data: {e}")
+            return False
 
     def clear_table(self) -> bool:
         """
