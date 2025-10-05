@@ -23,6 +23,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Restore upload records
+        uses: actions/download-artifact@v4
+        with:
+          name: upload-records
+          path: output/cache/
+        continue-on-error: true  # Don't fail if no previous artifacts
+
       - name: Run Daily Update (TEST MODE)
         env:
           DUNE_API_KEY: ${{ secrets.DUNE_API_KEY }}
@@ -40,6 +47,13 @@ jobs:
             output/
             *.log
           retention-days: 30
+
+      - name: Save upload records
+        uses: actions/upload-artifact@v4
+        with:
+          name: upload-records
+          path: output/cache/uploaded_*.txt
+          retention-days: 7  # Keep for 1 week to handle weekend gaps
 
       - name: Pipeline Summary
         if: always()
