@@ -370,13 +370,13 @@ def main():
         # Step 2: Filter by target projects
         logger.info("🔄 Step 2: Filtering by target projects...")
         target_projects = {
-            # "curve-dex",
-            # "pancakeswap-amm",
+            "curve-dex",
+            "pancakeswap-amm",
             "pancakeswap-amm-v3",
             "aerodrome-slipstream",
-            # "aerodrome-v1",
-            # "uniswap-v2",
-            # "uniswap-v3",
+            "aerodrome-v1",
+            "uniswap-v2",
+            "uniswap-v3",
             "fluid-dex",
         }
         filtered_dimensions_df = filter_pools_by_projects(
