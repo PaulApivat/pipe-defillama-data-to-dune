@@ -51,6 +51,15 @@ class DuneUploader:
         else:
             self.facts_table = "prod_defillama_historical_facts"
 
+        # Initialize Dune Client for SDK-based operations
+        try:
+            from dune_client.client import DuneClient
+
+            self.dune_client = DuneClient.from_env()
+        except Exception as e:
+            logger.warning(f"⚠️ Could not initialize Dune Client: {e}")
+            self.dune_client = None
+
     def _create_session(self) -> requests.Session:
         """Create HTTP session with enhanced retry logic for daily pipeline reliability"""
         session = requests.Session()
@@ -351,9 +360,241 @@ class DuneUploader:
             logger.error(f"❌ Data quality validation error: {e}")
             return False
 
+    def _execute_duplicate_detection_query(self, target_date: date) -> bool:
+        """
+        Execute a pre-created query to check if data exists for a specific date using Dune Client SDK
+
+        Args:
+            target_date: Date to check
+
+        Returns:
+            bool: True if data exists for this date
+        """
+        try:
+            from dune_client.query import QueryBase, QueryParameter
+
+            query_id = self._get_duplicate_detection_query_id()
+
+            if not query_id:
+                logger.warning("⚠️ No duplicate detection query configured")
+                return False
+
+            # Set up query parameters with dynamic date
+            date_str = target_date.strftime("%Y-%m-%d")
+
+            logger.info(f"🔍 Dynamic date parameter: {date_str}")
+            logger.info(f"🔍 Target date object: {target_date}")
+            logger.info(f"🔍 Date format: YYYY-MM-DD")
+
+            # Create QueryBase with proper QueryParameter using Dune Client SDK
+            query = QueryBase(
+                name="DeFiLlama Duplicate Detection",
+                query_id=query_id,
+                params=[QueryParameter.text_type(name="date", value=date_str)],
+            )
+
+            logger.info(f"🔍 Executing duplicate detection query for {target_date}")
+            logger.info(f"🔍 Query object: {query}")
+            logger.info(f"🔍 Query URL: {query.url()}")
+
+            # Execute using Dune Client SDK
+            results = self.dune_client.run_query(query)
+
+            logger.info(f"🔍 Query execution completed")
+            logger.info(f"🔍 Results state: {results.state}")
+
+            if results.state.value == "QUERY_STATE_COMPLETED":
+                # Get the row count from results
+                rows = results.get_rows()
+                logger.info(f"🔍 Query rows: {rows}")
+
+                if rows and len(rows) > 0:
+                    # Handle both dictionary and list formats
+                    if isinstance(rows[0], dict):
+                        row_count = rows[0].get("row_count", 0)
+                    else:
+                        row_count = rows[0][0] if rows[0] else 0
+                    logger.info(f"🔍 Row count: {row_count}")
+
+                    exists = row_count > 0
+
+                    if exists:
+                        logger.info(
+                            f"✅ Found {row_count} existing records for {target_date}"
+                        )
+                    else:
+                        logger.info(f"✅ No existing records for {target_date}")
+
+                    return exists
+                else:
+                    logger.info(f"✅ No rows in results for {target_date}")
+                    return False
+            else:
+                logger.warning(f"⚠️ Query execution failed with state: {results.state}")
+                return None  # Return None to trigger fallback to file-based detection
+
+        except Exception as e:
+            logger.warning(f"⚠️ Could not execute duplicate detection query: {e}")
+            return None  # Return None to trigger fallback to file-based detection
+
+    def _get_duplicate_detection_query_id(self) -> Optional[int]:
+        """
+        Get the query ID for duplicate detection query
+
+        Returns:
+            int: Query ID if configured, None otherwise
+        """
+        # Query ID for DeFiLlama Duplicate Detection query
+        # Created via scripts/create_duplicate_detection_query.py
+        # Query URL: https://dune.com/queries/5917236
+        #
+        # For production
+        # return int(os.getenv("DUNE_DUPLICATE_DETECTION_QUERY_ID", "5917236"))
+        return 5917236
+
+    def _get_query_results(self, execution_id: str, target_date: date) -> bool:
+        """
+        Get results from query execution to determine if data exists
+
+        Args:
+            execution_id: Execution ID from query execution
+            target_date: Date being checked
+
+        Returns:
+            bool: True if data exists
+        """
+        try:
+            # Wait for query completion with timeout
+            max_attempts = 10  # 10 seconds max wait
+            attempt = 0
+
+            while attempt < max_attempts:
+                # Get execution status
+                status_url = f"{self.base_url}/execution/{execution_id}/status"
+                response = self.session.get(status_url)
+                response.raise_for_status()
+
+                status = response.json()
+                state = status.get("state")
+
+                if state == "QUERY_STATE_COMPLETE":
+                    logger.info(f"✅ Query completed successfully")
+                    break
+                elif state == "QUERY_STATE_FAILED":
+                    logger.warning(f"⚠️ Query failed: {status.get('error')}")
+                    return None  # Return None to trigger fallback
+                elif state == "QUERY_STATE_PENDING":
+                    logger.info(
+                        f"⏳ Query still pending, waiting... (attempt {attempt + 1}/{max_attempts})"
+                    )
+                    time.sleep(1)  # Wait 1 second before retry
+                    attempt += 1
+                else:
+                    logger.warning(f"⚠️ Unknown query state: {state}")
+                    return None  # Return None to trigger fallback
+
+            if attempt >= max_attempts:
+                logger.warning(f"⚠️ Query timeout after {max_attempts} seconds")
+                return None  # Return None to trigger fallback
+
+            # Get results
+            results_url = f"{self.base_url}/execution/{execution_id}/results"
+            response = self.session.get(results_url)
+            response.raise_for_status()
+
+            results = response.json()
+            logger.info(f"🔍 Query results: {results}")
+
+            rows = results.get("result", {}).get("rows", [])
+            logger.info(f"🔍 Query rows: {rows}")
+
+            if not rows:
+                logger.info(f"✅ No data found for {target_date}")
+                return False
+
+            # Check if any rows exist (row count > 0)
+            row_count = rows[0][0] if rows else 0
+            exists = row_count > 0
+
+            if exists:
+                logger.info(f"✅ Found {row_count} existing records for {target_date}")
+            else:
+                logger.info(f"✅ No existing records for {target_date}")
+
+            return exists
+
+        except Exception as e:
+            logger.warning(f"⚠️ Could not get query results: {e}")
+            return False
+
     def _data_exists_for_date(self, target_date: date) -> bool:
         """
-        Check if data already exists for a specific date using file-based tracking
+        Check if data already exists for a specific date
+
+        Uses different strategies based on environment:
+        - GitHub Actions: Dune Client SDK only (ephemeral environment)
+        - Local runs: File-based detection first, then Dune Client SDK fallback
+
+        Args:
+            target_date: Date to check
+
+        Returns:
+            bool: True if data exists for this date
+        """
+        # Check if running in GitHub Actions
+        is_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
+
+        if is_github_actions:
+            # GitHub Actions: Use Dune Client SDK only
+            logger.info(
+                f"🔍 GitHub Actions detected - using Dune Client SDK for {target_date}"
+            )
+            try:
+                result = self._execute_duplicate_detection_query(target_date)
+                if result is not None:
+                    return result
+                else:
+                    logger.warning(
+                        f"⚠️ Dune query failed, assuming no data exists for {target_date}"
+                    )
+                    return False
+            except Exception as e:
+                logger.warning(f"⚠️ Could not check for existing data: {e}")
+                return False
+        else:
+            # Local runs: Use file-based detection first, then Dune Client SDK fallback
+            logger.info(
+                f"🔍 Local run detected - using file-based detection for {target_date}"
+            )
+            try:
+                # Try file-based detection first (faster for local runs)
+                file_result = self._data_exists_for_date_file_based(target_date)
+                if file_result:
+                    return True
+
+                # If no file found, try Dune Client SDK as fallback
+                logger.info(
+                    f"🔄 No local file found, trying Dune Client SDK for {target_date}"
+                )
+                dune_result = self._execute_duplicate_detection_query(target_date)
+                if dune_result is not None:
+                    return dune_result
+                else:
+                    logger.warning(
+                        f"⚠️ Dune query failed, assuming no data exists for {target_date}"
+                    )
+                    return False
+
+            except Exception as e:
+                logger.warning(f"⚠️ Could not check for existing data: {e}")
+                return False
+
+    def _data_exists_for_date_file_based(self, target_date: date) -> bool:
+        """
+        Check if data already exists using file-based tracking (local runs only)
+
+        This method is used for local development and testing where files persist.
+        Not used in GitHub Actions due to ephemeral nature.
 
         Args:
             target_date: Date to check

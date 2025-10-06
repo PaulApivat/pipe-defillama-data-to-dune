@@ -222,8 +222,9 @@ class PipelineOrchestrator:
                 os.remove(temp_file)
                 logger.info(f"✅ Cleaned up {temp_file}")
 
-            # Clean up old upload records (older than 48 hours)
-            self._cleanup_old_upload_records()
+            # Clean up old upload records (local runs only)
+            if not os.getenv("GITHUB_ACTIONS"):
+                self._cleanup_old_upload_records()
 
             logger.info(f"✅ Daily update completed successfully for {target_date}!")
             return True
@@ -234,10 +235,11 @@ class PipelineOrchestrator:
 
     def _cleanup_old_upload_records(self) -> None:
         """
-        Clean up upload record files older than 72 hours to prevent storage bloat
+        Clean up upload record files older than 72 hours to prevent storage bloat (local runs only)
 
         This keeps the file-based duplicate detection working while managing storage.
         72 hours covers weekend gaps (Friday 6 AM → Monday 6 AM = 66 hours).
+        Only runs in local environment, not in GitHub Actions.
         """
         try:
             import glob

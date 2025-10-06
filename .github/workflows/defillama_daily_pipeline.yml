@@ -23,34 +23,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Restore upload records
-        uses: actions/download-artifact@v4
-        with:
-          name: upload-records
-          path: output/cache/
-        continue-on-error: true  # Don't fail if no previous artifacts
-
-      - name: Check upload records status
+      - name: Create cache directory
         run: |
-          echo "=========================================="
-          echo "🔍 CHECKING UPLOAD RECORDS STATUS"
-          echo "=========================================="
-          echo "📁 Upload Records Status:"
-          if [ -d "output/cache" ]; then
-            echo "📂 Cache directory exists"
-            ls -la output/cache/ || echo "No files in cache directory"
-            if ls output/cache/uploaded_*.txt 1> /dev/null 2>&1; then
-              echo "✅ Found existing upload records:"
-              ls -la output/cache/uploaded_*.txt
-              echo "📄 Upload record contents:"
-              cat output/cache/uploaded_*.txt || echo "Could not read upload records"
-            else
-              echo "❌ No existing upload records found"
-            fi
-          else
-            echo "❌ Cache directory does not exist"
-          fi
-          echo "=========================================="
+          echo "📁 Creating cache directory for local file operations"
+          mkdir -p output/cache
 
       - name: Run Daily Update (TEST MODE)
         env:
@@ -70,47 +46,18 @@ jobs:
             *.log
           retention-days: 30
 
-      - name: Check upload records after pipeline
+      - name: Check pipeline results
         run: |
           echo "=========================================="
-          echo "🔍 CHECKING UPLOAD RECORDS AFTER PIPELINE"
+          echo "🔍 CHECKING PIPELINE RESULTS"
           echo "=========================================="
-          echo "📁 Upload Records After Pipeline:"
+          echo "📁 Cache directory contents:"
           if [ -d "output/cache" ]; then
-            echo "📂 Cache directory exists"
-            if ls output/cache/uploaded_*.txt 1> /dev/null 2>&1; then
-              echo "✅ Upload records created:"
-              ls -la output/cache/uploaded_*.txt
-              echo "📄 Upload record contents:"
-              cat output/cache/uploaded_*.txt
-            else
-              echo "❌ No upload records were created"
-            fi
+            ls -la output/cache/ || echo "No files in cache directory"
           else
             echo "❌ Cache directory does not exist"
           fi
           echo "=========================================="
-
-      - name: Save upload records
-        run: |
-          echo "=========================================="
-          echo "💾 SAVING UPLOAD RECORDS AS ARTIFACTS"
-          echo "=========================================="
-          echo "📁 Files to save as artifacts:"
-          if ls output/cache/uploaded_*.txt 1> /dev/null 2>&1; then
-            ls -la output/cache/uploaded_*.txt
-            echo "✅ Upload records will be saved as 'upload-records' artifact"
-          else
-            echo "❌ No upload records to save"
-          fi
-          echo "=========================================="
-
-      - name: Upload upload records artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: upload-records
-          path: output/cache/uploaded_*.txt
-          retention-days: 7  # Keep for 1 week to handle weekend gaps
 
       - name: Pipeline Summary
         if: always()

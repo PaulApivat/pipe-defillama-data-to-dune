@@ -357,20 +357,27 @@ def test_duplicate_detection_prevents_duplicate_uploads():
     print(f"🔍 Checking for upload record: {upload_record}")
     print(f"🔍 File exists: {os.path.exists(upload_record)}")
 
-    # Test that no upload record exists initially
-    result = uploader._data_exists_for_date(test_date)
-    print(f"🔍 _data_exists_for_date returned: {result}")
-    assert result == False, "Should return False when no upload record exists"
-    print("✅ Correctly detected no existing data")
+    # Mock the Dune Client SDK to return no data, so it falls back to file-based detection
+    with patch.object(uploader, "dune_client") as mock_client:
+        mock_client.run_query.side_effect = Exception("Query failed")
+
+        # Test that no upload record exists initially
+        result = uploader._data_exists_for_date(test_date)
+        print(f"🔍 _data_exists_for_date returned: {result}")
+        assert result == False, "Should return False when no upload record exists"
+        print("✅ Correctly detected no existing data")
 
     # Create upload record manually
     with open(upload_record, "w") as f:
         f.write(f"Test upload for {test_date}")
 
     # Test that duplicate detection now finds the file
-    result = uploader._data_exists_for_date(test_date)
-    assert result == True, "Should return True when upload record exists"
-    print("✅ File-based duplicate detection works correctly")
+    with patch.object(uploader, "dune_client") as mock_client:
+        mock_client.run_query.side_effect = Exception("Query failed")
+
+        result = uploader._data_exists_for_date(test_date)
+        assert result == True, "Should return True when upload record exists"
+        print("✅ File-based duplicate detection works correctly")
 
     # Clean up
     if os.path.exists(upload_record):
@@ -439,11 +446,23 @@ def test_file_based_duplicate_detection():
     # Create uploader in test mode
     uploader = DuneUploader(test_mode=True)
 
+    # Clean up any existing upload record for this test date
+    date_str = test_date.strftime("%Y-%m-%d")
+    upload_record = f"output/cache/uploaded_{date_str}.txt"
+    if os.path.exists(upload_record):
+        os.remove(upload_record)
+        print("🧹 Cleaned up existing upload record before test")
+
     # Test 1: No upload record exists initially
     print("1️⃣ Testing no upload record exists...")
-    result = uploader._data_exists_for_date(test_date)
-    assert result == False, "Should return False when no upload record exists"
-    print("✅ Correctly detected no existing data")
+
+    # Mock the Dune Client SDK to fail so it falls back to file-based detection
+    with patch.object(uploader, "dune_client") as mock_client:
+        mock_client.run_query.side_effect = Exception("Query failed")
+
+        result = uploader._data_exists_for_date(test_date)
+        assert result == False, "Should return False when no upload record exists"
+        print("✅ Correctly detected no existing data")
 
     # Test 2: Create upload record manually
     print("2️⃣ Testing upload record creation...")
@@ -457,9 +476,14 @@ def test_file_based_duplicate_detection():
 
     # Test 3: Check that duplicate detection now works
     print("3️⃣ Testing duplicate detection with existing record...")
-    result = uploader._data_exists_for_date(test_date)
-    assert result == True, "Should return True when upload record exists"
-    print("✅ Correctly detected existing data")
+
+    # Mock the Dune Client SDK to fail so it falls back to file-based detection
+    with patch.object(uploader, "dune_client") as mock_client:
+        mock_client.run_query.side_effect = Exception("Query failed")
+
+        result = uploader._data_exists_for_date(test_date)
+        assert result == True, "Should return True when upload record exists"
+        print("✅ Correctly detected existing data")
 
     # Test 4: Verify file content
     print("4️⃣ Testing upload record content...")
@@ -547,6 +571,165 @@ def test_upload_record_cleanup():
     return True
 
 
+def test_dune_client_sdk_duplicate_detection():
+    """Test that Dune Client SDK duplicate detection works correctly"""
+    print("\n🔍 Testing Dune Client SDK duplicate detection...")
+
+    from src.load.dune_uploader import DuneUploader
+    from datetime import date
+    import polars as pl
+    from unittest.mock import patch, MagicMock
+
+    # Create test data with dynamic date
+    test_date = date.today()  # Use today's date dynamically
+    test_data = pl.DataFrame(
+        {
+            "timestamp": [test_date],
+            "pool_id": [b"\x12\x34\xab\xcd"],
+            "pool_id_defillama": ["test-pool-1"],
+            "protocol_slug": ["test-protocol"],
+            "chain": ["ethereum"],
+            "symbol": ["TEST"],
+            "tvl_usd": [1000.0],
+            "apy": [5.0],
+            "apy_base": [4.0],
+            "apy_reward": [1.0],
+        }
+    )
+
+    # Create uploader in test mode
+    uploader = DuneUploader(test_mode=True)
+
+    # Test 1: Mock Dune Client SDK to return no existing data
+    print("1️⃣ Testing Dune Client SDK with no existing data...")
+
+    # Mock the Dune Client SDK response for no existing data
+    mock_results = MagicMock()
+    mock_results.state.value = "QUERY_STATE_COMPLETED"
+    mock_results.get_rows.return_value = [{"row_count": 0}]
+
+    with patch.object(uploader, "dune_client") as mock_client:
+        mock_client.run_query.return_value = mock_results
+
+        # Test the duplicate detection method directly
+        result = uploader._execute_duplicate_detection_query(test_date)
+        assert result == False, "Should return False when no data exists"
+        print("✅ Correctly detected no existing data via Dune Client SDK")
+
+    # Test 2: Mock Dune Client SDK to return existing data
+    print("2️⃣ Testing Dune Client SDK with existing data...")
+
+    # Mock the Dune Client SDK response for existing data
+    mock_results = MagicMock()
+    mock_results.state.value = "QUERY_STATE_COMPLETED"
+    mock_results.get_rows.return_value = [{"row_count": 2841}]
+
+    with patch.object(uploader, "dune_client") as mock_client:
+        mock_client.run_query.return_value = mock_results
+
+        # Test the duplicate detection method directly
+        result = uploader._execute_duplicate_detection_query(test_date)
+        assert result == True, "Should return True when data exists"
+        print("✅ Correctly detected existing data via Dune Client SDK")
+
+    # Test 3: Mock Dune Client SDK query failure (should fallback to file-based)
+    print("3️⃣ Testing Dune Client SDK query failure fallback...")
+
+    with patch.object(uploader, "dune_client") as mock_client, patch.object(
+        uploader, "_data_exists_for_date_file_based"
+    ) as mock_file_fallback:
+
+        # Mock query failure
+        mock_client.run_query.side_effect = Exception("Query failed")
+        mock_file_fallback.return_value = False
+
+        # Test the duplicate detection method directly
+        result = uploader._execute_duplicate_detection_query(test_date)
+        assert result == None, "Should return None when query fails to trigger fallback"
+        print("✅ Correctly returned None to trigger fallback when query failed")
+
+    # Test 4: Test the full _data_exists_for_date method with Dune Client SDK
+    print("4️⃣ Testing full _data_exists_for_date method...")
+
+    # Mock successful Dune Client SDK response
+    mock_results = MagicMock()
+    mock_results.state.value = "QUERY_STATE_COMPLETED"
+    mock_results.get_rows.return_value = [{"row_count": 100}]
+
+    with patch.object(uploader, "dune_client") as mock_client:
+        mock_client.run_query.return_value = mock_results
+
+        # Test the full method
+        result = uploader._data_exists_for_date(test_date)
+        assert result == True, "Should return True when Dune Client SDK finds data"
+        print("✅ Full _data_exists_for_date method works with Dune Client SDK")
+
+    # Test 5: Test QueryBase and QueryParameter creation
+    print("5️⃣ Testing QueryBase and QueryParameter creation...")
+
+    from dune_client.query import QueryBase, QueryParameter
+
+    # Test that we can create the query object correctly
+    query = QueryBase(
+        name="DeFiLlama Duplicate Detection",
+        query_id=5917236,
+        params=[
+            QueryParameter.text_type(name="date", value=test_date.strftime("%Y-%m-%d"))
+        ],
+    )
+
+    assert query.query_id == 5917236
+    assert query.name == "DeFiLlama Duplicate Detection"
+    assert len(query.params) == 1
+    # QueryParameter attributes - check the parameter directly
+    param = query.params[0]
+    # QueryParameter has different attribute names, let's check what's available
+    print(f"🔍 QueryParameter attributes: {dir(param)}")
+    # For now, just verify the parameter exists and has the right value
+    assert len(query.params) == 1, "Should have exactly one parameter"
+    print(f"🔍 Parameter value: {param.value}")
+    assert param.value == test_date.strftime(
+        "%Y-%m-%d"
+    ), "Parameter value should match test date"
+    print("✅ QueryBase and QueryParameter creation works correctly")
+
+    # Test 6: Test result parsing for both dictionary and list formats
+    print("6️⃣ Testing result parsing for different formats...")
+
+    # Test dictionary format (what we actually get)
+    mock_results_dict = MagicMock()
+    mock_results_dict.state.value = "QUERY_STATE_COMPLETED"
+    mock_results_dict.get_rows.return_value = [{"row_count": 150}]
+
+    with patch.object(uploader, "dune_client") as mock_client:
+        mock_client.run_query.return_value = mock_results_dict
+
+        result = uploader._execute_duplicate_detection_query(test_date)
+        assert result == True, "Should handle dictionary format correctly"
+        print("✅ Dictionary format parsing works correctly")
+
+    # Test list format (fallback)
+    mock_results_list = MagicMock()
+    mock_results_list.state.value = "QUERY_STATE_COMPLETED"
+    mock_results_list.get_rows.return_value = [[200]]
+
+    with patch.object(uploader, "dune_client") as mock_client:
+        mock_client.run_query.return_value = mock_results_list
+
+        result = uploader._execute_duplicate_detection_query(test_date)
+        assert result == True, "Should handle list format correctly"
+        print("✅ List format parsing works correctly")
+
+    print("✅ Dune Client SDK duplicate detection test passed")
+    print("   - No existing data detection works")
+    print("   - Existing data detection works")
+    print("   - Query failure fallback works")
+    print("   - Full method integration works")
+    print("   - QueryBase/QueryParameter creation works")
+    print("   - Result parsing handles both formats")
+    return True
+
+
 if __name__ == "__main__":
     print("🧪 Running Pipeline Integration Tests")
     print("=" * 50)
@@ -560,6 +743,7 @@ if __name__ == "__main__":
     test4_passed = test_duplicate_detection_prevents_duplicate_uploads()
     test5_passed = test_file_based_duplicate_detection()
     test6_passed = test_upload_record_cleanup()
+    test7_passed = test_dune_client_sdk_duplicate_detection()
 
     # Summary
     print("\n📊 Test Results:")
@@ -577,6 +761,9 @@ if __name__ == "__main__":
         f"   - File-based duplicate detection: {'✅ PASSED' if test5_passed else '❌ FAILED'}"
     )
     print(f"   - Upload record cleanup: {'✅ PASSED' if test6_passed else '❌ FAILED'}")
+    print(
+        f"   - Dune Client SDK duplicate detection: {'✅ PASSED' if test7_passed else '❌ FAILED'}"
+    )
 
     if (
         test1_passed
@@ -585,6 +772,7 @@ if __name__ == "__main__":
         and test4_passed
         and test5_passed
         and test6_passed
+        and test7_passed
     ):
         print("\n🎉 All integration tests passed!")
         print("   - Pipeline works correctly with real data")
@@ -593,6 +781,7 @@ if __name__ == "__main__":
         print("   - Duplicate detection works correctly")
         print("   - File-based duplicate detection works")
         print("   - Upload record cleanup works")
+        print("   - Dune Client SDK duplicate detection works")
         print("   - Ready for production use")
     else:
         print("\n❌ Some tests failed. Please review the issues above.")
