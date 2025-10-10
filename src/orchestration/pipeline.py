@@ -56,7 +56,6 @@ class PipelineOrchestrator:
         self,
         dune_api_key: Optional[str] = None,
         dry_run: bool = False,
-        test_mode: bool = False,
     ):
         """
         Initialize the Pipeline orchestrator
@@ -64,18 +63,13 @@ class PipelineOrchestrator:
         Args:
             dune_api_key: Dune API key (uses env var if not provided)
             dry_run: If true, skip actual Dune uploads
-            test_mode: If true, use test table instead of production table
         """
         self.dry_run = dry_run
-        self.test_mode = test_mode
 
         # Initialize Dune uploader only if not in dry run mode
         if not self.dry_run:
-            self.dune_uploader = DuneUploader(api_key=dune_api_key, test_mode=test_mode)
-            if test_mode:
-                logger.info(
-                    "🧪 TEST MODE: Using test table test_run_defillama_historical_facts"
-                )
+            self.dune_uploader = DuneUploader(api_key=dune_api_key)
+
         else:
             self.dune_uploader = None
             logger.info("🔍 DRY RUN MODE: Dune uploader not initialized")
@@ -307,11 +301,7 @@ def main():
         action="store_true",
         help="Run in dry-run mode (no Dune uploads)",
     )
-    parser.add_argument(
-        "--test-mode",
-        action="store_true",
-        help="Run in test mode (use test table instead of production)",
-    )
+
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Enable verbose logging"
     )
@@ -326,7 +316,7 @@ def main():
     )
 
     # Initialize orchestrator
-    orchestrator = PipelineOrchestrator(dry_run=args.dry_run, test_mode=args.test_mode)
+    orchestrator = PipelineOrchestrator(dry_run=args.dry_run)
 
     try:
         if args.mode == "initial":

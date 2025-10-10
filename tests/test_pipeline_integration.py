@@ -318,8 +318,8 @@ def test_duplicate_detection_prevents_duplicate_uploads():
     print("1️⃣ Testing first upload...")
     from src.load.dune_uploader import DuneUploader
 
-    # Create uploader in test mode
-    uploader = DuneUploader(test_mode=True)
+    # Create uploader in production mode
+    uploader = DuneUploader()
 
     # Mock the Dune API to return "no existing data" for first call
     with patch.object(uploader, "_data_exists_for_date") as mock_exists, patch.object(
@@ -443,8 +443,8 @@ def test_file_based_duplicate_detection():
         }
     )
 
-    # Create uploader in test mode
-    uploader = DuneUploader(test_mode=True)
+    # Create uploader in production mode
+    uploader = DuneUploader()
 
     # Clean up any existing upload record for this test date
     date_str = test_date.strftime("%Y-%m-%d")
@@ -597,8 +597,8 @@ def test_dune_client_sdk_duplicate_detection():
         }
     )
 
-    # Create uploader in test mode
-    uploader = DuneUploader(test_mode=True)
+    # Create uploader in production mode
+    uploader = DuneUploader()
 
     # Test 1: Mock Dune Client SDK to return no existing data
     print("1️⃣ Testing Dune Client SDK with no existing data...")

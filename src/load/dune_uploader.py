@@ -35,21 +35,15 @@ class DuneUploader:
         self,
         api_key: Optional[str] = None,
         namespace: str = "uniswap_fnd",
-        test_mode: bool = False,
     ):
         self.api_key = api_key or os.getenv("DUNE_API_KEY")
         if not self.api_key:
             raise ValueError("DUNE_API_KEY environment variable is not set")
 
         self.namespace = namespace
+        self.facts_table = "prod_defillama_historical_facts"
         self.base_url = "https://api.dune.com/api/v1"
         self.session = self._create_session()
-
-        # Facts table name - use test table if in test mode
-        if test_mode:
-            self.facts_table = "test_run_defillama_historical_facts"
-        else:
-            self.facts_table = "prod_defillama_historical_facts"
 
         # Initialize Dune Client for SDK-based operations
         try:

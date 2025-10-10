@@ -23,13 +23,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Initial Load (TEST MODE)
+      - name: Run Initial Load
         env:
           DUNE_API_KEY: ${{ secrets.DUNE_API_KEY }}
         run: |
-          echo "🚀 Starting DeFiLlama Initial Load (TEST MODE) at $(date)"
-          echo "🧪 Using test table: dune.uniswap_fnd.test_run_defillama_historical_facts"
-          python -m src.orchestration.pipeline --mode initial --verbose --test-mode
+          echo "🚀 Starting DeFiLlama Initial Load at $(date)"
+          echo "📊 Using production table: dune.uniswap_fnd.prod_defillama_historical_facts"
+          python -m src.orchestration.pipeline --mode initial --verbose
           echo "✅ Initial load completed at $(date)"
 
       - name: Upload logs and metrics

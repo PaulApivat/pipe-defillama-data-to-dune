@@ -28,13 +28,13 @@ jobs:
           echo "📁 Creating cache directory for local file operations"
           mkdir -p output/cache
 
-      - name: Run Daily Update (TEST MODE)
+      - name: Run Daily Update
         env:
           DUNE_API_KEY: ${{ secrets.DUNE_API_KEY }}
         run: |
-          echo "🚀 Starting DeFiLlama Daily Pipeline (TEST MODE) at $(date)"
-          echo "🧪 Using test table: dune.uniswap_fnd.test_run_defillama_historical_facts"
-          python -m src.orchestration.pipeline --mode daily --verbose --test-mode
+          echo "🚀 Starting DeFiLlama Daily Pipeline at $(date)"
+          echo "📊 Using production table: dune.uniswap_fnd.prod_defillama_historical_facts"
+          python -m src.orchestration.pipeline --mode daily --verbose
           echo "✅ Daily pipeline completed at $(date)"
 
       - name: Upload logs and metrics
